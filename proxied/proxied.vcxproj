@@ -157,6 +157,7 @@
   <ItemGroup>
     <Image Include="proxied.ico" />
     <Image Include="small.ico" />
+    <Image Include="small2.ico" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="manifest.xml">

@@ -4,6 +4,7 @@
 #include <fstream>
 #include <shellapi.h>
 #include <tchar.h>
+#include <algorithm> // for std::replace
 #include <stdio.h>
 #include <commctrl.h>
 #pragma comment(lib, "comctl32.lib")
@@ -322,6 +323,12 @@ void Proxied::SyncSettings() {
     PostMessage(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)_T("Environment"));
 
 	// 更新托盘提示
+	// 如果之前有图标资源，先释放
+	if (nid_.hIcon) {
+		DestroyIcon(nid_.hIcon);
+	}
+	// 加载新图标
+	nid_.hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(proxyEnabled_ ? IDI_SMALL2 : IDI_SMALL));
 	_tcscpy_s(nid_.szTip, sizeof(nid_.szTip) / sizeof(TCHAR),
 		proxyEnabled_ ? _T("Proxied - 代理已启用") : _T("Proxied - 代理已禁用"));
 	Shell_NotifyIcon(NIM_MODIFY, &nid_);

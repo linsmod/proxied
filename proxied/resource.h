@@ -11,7 +11,7 @@
 #define IDM_EXIT				105
 #define IDI_PROXIED			107
 #define IDI_SMALL				108
-#define IDC_PROXIED			109
+#define IDI_SMALL2			109
 #define IDC_MYICON				2
 #ifndef IDC_STATIC
 #define IDC_STATIC				-1
