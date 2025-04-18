@@ -23,6 +23,7 @@ private:
 
     // 常量定义
     static const UINT WM_TRAYICON = WM_USER + 1;
+    static const int IDM_GITHUB = 109;
     static const int IDM_EXIT = 100;
     static const int IDM_ENABLE = 101;
     static const int IDM_DISABLE = 102;

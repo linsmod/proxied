@@ -96,7 +96,6 @@ void Proxied::Run() {
 void Proxied::InitTrayIcon() {
     // 创建托盘菜单
     hPopupMenu_ = CreatePopupMenu();
-    AppendMenu(hPopupMenu_, MF_STRING, 0, _T("Proxied v1.1"));
     AppendMenu(hPopupMenu_, MF_STRING | (proxyEnabled_ ? MF_CHECKED : 0), IDM_ENABLE, _T("启用代理"));
     AppendMenu(hPopupMenu_, MF_STRING | (proxyEnabled_ ? 0 : MF_CHECKED), IDM_DISABLE, _T("禁用代理"));
     AppendMenu(hPopupMenu_, MF_SEPARATOR, 0, NULL);
@@ -104,7 +103,7 @@ void Proxied::InitTrayIcon() {
     //AppendMenu(hPopupMenu_, MF_SEPARATOR, 0, NULL);
     AppendMenu(hPopupMenu_, MF_STRING | (autoStart_ ? MF_CHECKED : 0), IDM_AUTOSTART, _T("开机自启"));
     AppendMenu(hPopupMenu_, MF_SEPARATOR, 0, NULL);
-    
+    AppendMenu(hPopupMenu_, MF_STRING, IDM_GITHUB, _T("Proxied v1.1"));
     AppendMenu(hPopupMenu_, MF_STRING, IDM_EXIT, _T("退出"));
 
     // 初始化托盘图标
@@ -389,6 +388,9 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
     }
     case WM_COMMAND: {
         switch (LOWORD(wParam)) {
+        case IDM_GITHUB:
+            ShellExecute(NULL, _T("open"), _T("https://github.com/linsmod/proxied"), NULL, NULL, SW_SHOWNORMAL);
+            break;
         case IDM_EXIT:
             Shell_NotifyIcon(NIM_DELETE, &pThis->nid_);
             PostQuitMessage(0);
