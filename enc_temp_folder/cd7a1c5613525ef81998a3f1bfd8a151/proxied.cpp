@@ -96,7 +96,7 @@ void Proxied::Run() {
 void Proxied::InitTrayIcon() {
     // 创建托盘菜单
     hPopupMenu_ = CreatePopupMenu();
-    AppendMenu(hPopupMenu_, MF_STRING, 0, _T("Proxied v1.1"));
+    AppendMenu(hPopupMenu_, MF_STRING, 0, _T("Proxied v1.0"));
     AppendMenu(hPopupMenu_, MF_STRING | (proxyEnabled_ ? MF_CHECKED : 0), IDM_ENABLE, _T("启用代理"));
     AppendMenu(hPopupMenu_, MF_STRING | (proxyEnabled_ ? 0 : MF_CHECKED), IDM_DISABLE, _T("禁用代理"));
     AppendMenu(hPopupMenu_, MF_SEPARATOR, 0, NULL);

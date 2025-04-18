@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <windows.h>
 #include <string>
@@ -10,6 +10,8 @@ public:
     ~Proxied();
 
     static DWORD WINAPI ThreadProc(LPVOID lpParam);
+
+    std::wstring EnsureProxyPrefix(const std::wstring& proxy);
 
     void Run();
 
@@ -38,7 +40,12 @@ private:
     HMENU hPopupMenu_;
     bool proxyEnabled_;
     std::wstring proxyServer_;
+    std::wstring nonProxyHosts_;
+    std::wstring gradleConfigPath_;
     bool autoStart_;
+
+    std::wstring GetGradleConfigPath();
+    bool UpdateGradleConfig(bool enable);
     HWND hWnd_;
     HANDLE hEvent_;
 
