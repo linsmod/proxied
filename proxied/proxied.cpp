@@ -246,8 +246,11 @@ bool Proxied::UpdateGradleConfig(bool enable) {
 			lines.push_back(_T("systemProp.https.proxyPort=") + port);
 
 			if (!nonProxyHosts_.empty()) {
-				lines.push_back(_T("systemProp.http.nonProxyHosts=") + nonProxyHosts_);
-				lines.push_back(_T("systemProp.https.nonProxyHosts=") + nonProxyHosts_);
+				// 转换Windows格式(分号分隔)为Gradle格式(竖线分隔)
+				std::wstring gradleNonProxy = nonProxyHosts_;
+				std::replace(gradleNonProxy.begin(), gradleNonProxy.end(), L';', L'|');
+				lines.push_back(_T("systemProp.http.nonProxyHosts=") + gradleNonProxy);
+				lines.push_back(_T("systemProp.https.nonProxyHosts=") + gradleNonProxy);
 			}
 			changed = true;
 		}
