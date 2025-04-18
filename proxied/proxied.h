@@ -13,6 +13,8 @@ public:
 
     std::wstring EnsureProxyPrefix(const std::wstring& proxy);
 
+    void SyncSettings();
+
     void Run();
 
 private:
@@ -39,7 +41,7 @@ private:
     std::wstring currentGroup_;
     NOTIFYICONDATA nid_;
     HMENU hPopupMenu_;
-    bool proxyEnabled_;
+    bool isUpdating;
     std::wstring proxyServer_;
     std::wstring nonProxyHosts_;
     std::wstring gradleConfigPath_;
@@ -54,7 +56,7 @@ private:
     void InitTrayIcon();
     void CheckAutoStart();
     void SetAutoStart(bool enable);
-    void GetProxySettings();
+    bool GetProxySettings();
     void UpdateUserEnvironmentVariable(const std::wstring& name, const std::wstring* value);
     void HandleRegistryChanges(HANDLE hEvent);
     void LoadProxyGroups();
