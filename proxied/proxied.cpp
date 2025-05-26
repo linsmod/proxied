@@ -7,6 +7,7 @@
 #include <algorithm> // for std::replace
 #include <stdio.h>
 #include <commctrl.h>
+#include <shlobj.h>
 #pragma comment(lib, "comctl32.lib")
 #define REG_PATH _T("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings")
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
@@ -215,9 +216,10 @@ bool Proxied::UpdateGradleConfig(bool enable) {
 	std::wifstream inFile(configPath);
 	std::vector<std::wstring> lines;
 	bool changed = false;
+	bool fileExists = inFile.good();
 
 	// 读取现有配置并过滤所有代理相关设置
-	if (inFile) {
+	if (fileExists) {
 		std::wstring line;
 		while (std::getline(inFile, line)) {
 			if (line.find(_T("systemProp.http.proxyHost=")) != std::wstring::npos ||
@@ -232,6 +234,12 @@ bool Proxied::UpdateGradleConfig(bool enable) {
 			lines.push_back(line);
 		}
 		inFile.close();
+	}
+	else if (enable) {
+		// 如果文件不存在且需要启用代理，标记为已更改以创建新文件
+		changed = true;
+		// 确保 lines 向量为空
+		lines.clear();
 	}
 
 	// 添加新配置
@@ -259,6 +267,10 @@ bool Proxied::UpdateGradleConfig(bool enable) {
 
 	// 写入文件
 	if (changed) {
+		// 确保目录存在
+		std::wstring dirPath = configPath.substr(0, configPath.find_last_of(L'\\'));
+		SHCreateDirectoryEx(NULL, dirPath.c_str(), NULL);
+		
 		std::wofstream outFile(configPath);
 		if (outFile) {
 			for (const auto& line : lines) {
@@ -320,7 +332,8 @@ void Proxied::SyncSettings() {
 		UpdateGradleConfig(false);
 	}
     // 广播环境变量变更到其他应用程序
-    PostMessage(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)_T("Environment"));
+    //PostMessage(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)_T("Environment"));
+	 SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)_T("Environment"), SMTO_ABORTIFHUNG, 5000, NULL);
 
 	// 更新托盘提示
 	// 如果之前有图标资源，先释放
