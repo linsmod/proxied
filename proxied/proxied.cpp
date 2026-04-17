@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "proxied.h"
 #include "Resource.h"
 #include <fstream>
@@ -25,6 +25,7 @@ Proxied::Proxied() :
 	isUpdating(false),
 	autoStart_(false),
 	gitProxyEnabled_(true),
+	gradleProxyEnabled_(true),
 	hWnd_(NULL),
 	hPopupMenu_(NULL),
 	hEvent_(NULL) {
@@ -67,6 +68,7 @@ void Proxied::Run() {
 
 	CheckAutoStart();
 	CheckGitProxySetting();
+	CheckGradleProxySetting();
 
 	InitTrayIcon();
 
@@ -109,6 +111,7 @@ void Proxied::InitTrayIcon() {
 	//AppendMenu(hPopupMenu_, MF_SEPARATOR, 0, NULL);
 	AppendMenu(hPopupMenu_, MF_STRING | (autoStart_ ? MF_CHECKED : 0), IDM_AUTOSTART, _T("开机自启"));
 	AppendMenu(hPopupMenu_, MF_STRING | (gitProxyEnabled_ ? MF_CHECKED : 0), IDM_GIT_PROXY, _T("当启用或禁用时也修改Git的全局代理设置"));
+	AppendMenu(hPopupMenu_, MF_STRING | (gradleProxyEnabled_ ? MF_CHECKED : 0), IDM_GRADLE_PROXY, _T("当启用或禁用时也修改Gradle的代理设置"));
 	AppendMenu(hPopupMenu_, MF_SEPARATOR, 0, NULL);
 	AppendMenu(hPopupMenu_, MF_STRING, IDM_GITHUB, _T("关于 V1.1"));
 	AppendMenu(hPopupMenu_, MF_STRING, IDM_EXIT, _T("退出"));
@@ -380,14 +383,18 @@ void Proxied::SyncSettings() {
         std::wstring proxyWithPrefix = EnsureProxyPrefix(proxyServer_);
         UpdateUserEnvironmentVariable(_T("http_proxy"), &proxyWithPrefix);
         UpdateUserEnvironmentVariable(_T("https_proxy"), &proxyWithPrefix);
-        UpdateGradleConfig(true);
+        if (gradleProxyEnabled_) {
+            UpdateGradleConfig(true);
+        }
         if (gitProxyEnabled_) {
             UpdateGitConfig(true);
         }
     } else {
         UpdateUserEnvironmentVariable(_T("http_proxy"), nullptr);
         UpdateUserEnvironmentVariable(_T("https_proxy"), nullptr);
-        UpdateGradleConfig(false);
+        if (gradleProxyEnabled_) {
+            UpdateGradleConfig(false);
+        }
         if (gitProxyEnabled_) {
             UpdateGitConfig(false);
         }
@@ -411,6 +418,7 @@ void Proxied::SyncSettings() {
 	CheckMenuItem(hPopupMenu_, IDM_ENABLE, MF_BYCOMMAND | (proxyEnabled ? MF_CHECKED : MF_UNCHECKED));
 	CheckMenuItem(hPopupMenu_, IDM_DISABLE, MF_BYCOMMAND | (proxyEnabled ? MF_UNCHECKED : MF_CHECKED));
 	CheckMenuItem(hPopupMenu_, IDM_GIT_PROXY, MF_BYCOMMAND | (gitProxyEnabled_ ? MF_CHECKED : MF_UNCHECKED));
+	CheckMenuItem(hPopupMenu_, IDM_GRADLE_PROXY, MF_BYCOMMAND | (gradleProxyEnabled_ ? MF_CHECKED : MF_UNCHECKED));
 }
 
 void Proxied::HandleRegistryChanges(HANDLE hEvent) {
@@ -485,6 +493,13 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 			pThis->SetGitProxySetting(!pThis->gitProxyEnabled_);
 			CheckMenuItem(pThis->hPopupMenu_, IDM_GIT_PROXY,
 				pThis->gitProxyEnabled_ ? MF_CHECKED : MF_UNCHECKED);
+			// 立即同步设置
+			pThis->SyncSettings();
+			break;
+		case IDM_GRADLE_PROXY:
+			pThis->SetGradleProxySetting(!pThis->gradleProxyEnabled_);
+			CheckMenuItem(pThis->hPopupMenu_, IDM_GRADLE_PROXY,
+				pThis->gradleProxyEnabled_ ? MF_CHECKED : MF_UNCHECKED);
 			// 立即同步设置
 			pThis->SyncSettings();
 			break;
@@ -735,5 +750,37 @@ void Proxied::SetGitProxySetting(bool enable) {
     
         RegCloseKey(hKey);
         gitProxyEnabled_ = enable;
+    }
+}
+
+void Proxied::CheckGradleProxySetting() {
+    HKEY hKey;
+    if (RegOpenKeyEx(HKEY_CURRENT_USER,
+        _T("Software\\Proxied"),
+        0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+    
+        DWORD value = 1; // 默认启用
+        DWORD size = sizeof(DWORD);
+        if (RegQueryValueEx(hKey, _T("GradleProxyEnabled"), NULL, NULL,
+            reinterpret_cast<LPBYTE>(&value), &size) == ERROR_SUCCESS) {
+            gradleProxyEnabled_ = (value != 0);
+        }
+    
+        RegCloseKey(hKey);
+    }
+}
+
+void Proxied::SetGradleProxySetting(bool enable) {
+    HKEY hKey;
+    if (RegCreateKeyEx(HKEY_CURRENT_USER,
+        _T("Software\\Proxied"),
+        0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+    
+        DWORD value = enable ? 1 : 0;
+        RegSetValueEx(hKey, _T("GradleProxyEnabled"), 0, REG_DWORD,
+            reinterpret_cast<const BYTE*>(&value), sizeof(value));
+    
+        RegCloseKey(hKey);
+        gradleProxyEnabled_ = enable;
     }
 }

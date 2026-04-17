@@ -1,4 +1,4 @@
-﻿//{{NO_DEPENDENCIES}}
+//{{NO_DEPENDENCIES}}
 // Microsoft Visual C++ 生成的包含文件。
 // 使用者 proxied.rc
 
@@ -31,6 +31,8 @@
 #define IDM_CONFIG              103
 #define IDM_AUTOSTART           104
 #define IDM_EXIT                105
+#define IDM_GIT_PROXY           110
+#define IDM_GRADLE_PROXY        111
 
 // 新对象的下一组默认值
 //

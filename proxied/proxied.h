@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <windows.h>
 #include <string>
@@ -32,6 +32,7 @@ private:
     static const int IDM_CONFIG = 103;
     static const int IDM_AUTOSTART = 104;
     static const int IDM_GIT_PROXY = 110;
+    static const int IDM_GRADLE_PROXY = 111;
     static const int IDC_PROXY_SERVER = 105;
     static const int IDC_PROXY_GROUP = 106;
     static const int IDC_ADD_GROUP = 107;
@@ -48,6 +49,7 @@ private:
     std::wstring gradleConfigPath_;
     bool autoStart_;
     bool gitProxyEnabled_;
+    bool gradleProxyEnabled_;
 
     std::wstring GetGradleConfigPath();
     bool UpdateGradleConfig(bool enable);
@@ -66,6 +68,8 @@ private:
     void SaveProxyGroups();
     void CheckGitProxySetting();
     void SetGitProxySetting(bool enable);
+    void CheckGradleProxySetting();
+    void SetGradleProxySetting(bool enable);
 
     // 窗口过程
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
