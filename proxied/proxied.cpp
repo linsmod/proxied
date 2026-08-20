@@ -26,6 +26,7 @@ Proxied::Proxied() :
 	autoStart_(false),
 	gitProxyEnabled_(true),
 	gradleProxyEnabled_(true),
+	wslGitProxyEnabled_(true),
 	hWnd_(NULL),
 	hPopupMenu_(NULL),
 	hEvent_(NULL) {
@@ -69,6 +70,7 @@ void Proxied::Run() {
 	CheckAutoStart();
 	CheckGitProxySetting();
 	CheckGradleProxySetting();
+	CheckWslGitProxySetting();
 
 	InitTrayIcon();
 
@@ -112,6 +114,7 @@ void Proxied::InitTrayIcon() {
 	AppendMenu(hPopupMenu_, MF_STRING | (autoStart_ ? MF_CHECKED : 0), IDM_AUTOSTART, _T("开机自启"));
 	AppendMenu(hPopupMenu_, MF_STRING | (gitProxyEnabled_ ? MF_CHECKED : 0), IDM_GIT_PROXY, _T("当启用或禁用时也修改Git的全局代理设置"));
 	AppendMenu(hPopupMenu_, MF_STRING | (gradleProxyEnabled_ ? MF_CHECKED : 0), IDM_GRADLE_PROXY, _T("当启用或禁用时也修改Gradle的代理设置"));
+	AppendMenu(hPopupMenu_, MF_STRING | (wslGitProxyEnabled_ ? MF_CHECKED : 0), IDM_WSL_GIT_PROXY, _T("当启用或禁用时也修改WSL内Git的代理设置"));
 	AppendMenu(hPopupMenu_, MF_SEPARATOR, 0, NULL);
 	AppendMenu(hPopupMenu_, MF_STRING, IDM_GITHUB, _T("关于 V1.1"));
 	AppendMenu(hPopupMenu_, MF_STRING, IDM_EXIT, _T("退出"));
@@ -155,7 +158,7 @@ void Proxied::SetAutoStart(bool enable) {
 			GetModuleFileName(NULL, path, MAX_PATH);
 			RegSetValueEx(hKey, _T("Proxied"), 0, REG_SZ,
 				reinterpret_cast<const BYTE*>(path),
-				(wcslen(path) + 1) * sizeof(wchar_t));
+				static_cast<DWORD>((wcslen(path) + 1) * sizeof(wchar_t)));
 		}
 		else {
 			RegDeleteValue(hKey, _T("Proxied"));
@@ -293,7 +296,7 @@ void Proxied::UpdateUserEnvironmentVariable(const std::wstring& name, const std:
 	HKEY hKey;
 	if (RegOpenKeyEx(HKEY_CURRENT_USER, _T("Environment"), 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
 		if (value) {
-			RegSetValueEx(hKey, name.c_str(), 0, REG_SZ, (const BYTE*)value->c_str(), (value->size() + 1) * sizeof(wchar_t));
+			RegSetValueEx(hKey, name.c_str(), 0, REG_SZ, (const BYTE*)value->c_str(), static_cast<DWORD>((value->size() + 1) * sizeof(wchar_t)));
 		}
 		else {
 			RegDeleteValue(hKey, name.c_str());
@@ -375,6 +378,55 @@ bool Proxied::UpdateGitConfig(bool enable) {
     return (exitCode == 0);
 }
 
+bool Proxied::UpdateWslGitConfig(bool enable) {
+    std::wstring command;
+    if (enable) {
+        std::wstring proxyWithPrefix = EnsureProxyPrefix(proxyServer_);
+        // 在 WSL 里设置 git 的全局代理
+        command = L"wsl.exe -e sh -c \"git config --global http.proxy '" + proxyWithPrefix +
+            L"' && git config --global https.proxy '" + proxyWithPrefix + L"'\"";
+    } else {
+        // 关闭时移除代理配置；--unset-all 对不存在的键会报错，2>/dev/null 吞掉即可
+        command = L"wsl.exe -e sh -c \"git config --global --unset-all http.proxy 2>/dev/null; "
+            L"git config --global --unset-all https.proxy 2>/dev/null; exit 0\"";
+    }
+
+    // 直接启动 wsl.exe（不经过 cmd，避免引号转义问题）
+    STARTUPINFO si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    ZeroMemory(&pi, sizeof(pi));
+
+    if (!CreateProcess(NULL,
+        (LPWSTR)command.c_str(),
+        NULL,
+        NULL,
+        FALSE,
+        CREATE_NO_WINDOW,
+        NULL,
+        NULL,
+        &si,
+        &pi)) {
+        return false;
+    }
+
+    // 等待进程完成
+    WaitForSingleObject(pi.hProcess, INFINITE);
+
+    // 获取退出码
+    DWORD exitCode;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+
+    // 关闭句柄
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    return (exitCode == 0);
+}
+
 void Proxied::SyncSettings() {
     // 初始读取代理设置
     bool proxyEnabled = GetProxySettings();
@@ -389,6 +441,9 @@ void Proxied::SyncSettings() {
         if (gitProxyEnabled_) {
             UpdateGitConfig(true);
         }
+        if (wslGitProxyEnabled_) {
+            UpdateWslGitConfig(true);
+        }
     } else {
         UpdateUserEnvironmentVariable(_T("http_proxy"), nullptr);
         UpdateUserEnvironmentVariable(_T("https_proxy"), nullptr);
@@ -397,6 +452,9 @@ void Proxied::SyncSettings() {
         }
         if (gitProxyEnabled_) {
             UpdateGitConfig(false);
+        }
+        if (wslGitProxyEnabled_) {
+            UpdateWslGitConfig(false);
         }
     }
     // 广播环境变量变更到其他应用程序
@@ -419,6 +477,7 @@ void Proxied::SyncSettings() {
 	CheckMenuItem(hPopupMenu_, IDM_DISABLE, MF_BYCOMMAND | (proxyEnabled ? MF_UNCHECKED : MF_CHECKED));
 	CheckMenuItem(hPopupMenu_, IDM_GIT_PROXY, MF_BYCOMMAND | (gitProxyEnabled_ ? MF_CHECKED : MF_UNCHECKED));
 	CheckMenuItem(hPopupMenu_, IDM_GRADLE_PROXY, MF_BYCOMMAND | (gradleProxyEnabled_ ? MF_CHECKED : MF_UNCHECKED));
+	CheckMenuItem(hPopupMenu_, IDM_WSL_GIT_PROXY, MF_BYCOMMAND | (wslGitProxyEnabled_ ? MF_CHECKED : MF_UNCHECKED));
 }
 
 void Proxied::HandleRegistryChanges(HANDLE hEvent) {
@@ -503,6 +562,13 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 			// 立即同步设置
 			pThis->SyncSettings();
 			break;
+		case IDM_WSL_GIT_PROXY:
+			pThis->SetWslGitProxySetting(!pThis->wslGitProxyEnabled_);
+			CheckMenuItem(pThis->hPopupMenu_, IDM_WSL_GIT_PROXY,
+				pThis->wslGitProxyEnabled_ ? MF_CHECKED : MF_UNCHECKED);
+			// 立即同步设置
+			pThis->SyncSettings();
+			break;
 		case IDM_CONFIG:
 			DialogBoxParam(GetModuleHandle(NULL),
 				MAKEINTRESOURCE(IDD_PROXY_CONFIG),
@@ -547,10 +613,10 @@ INT_PTR CALLBACK Proxied::ConfigDialogProc(HWND hDlg, UINT message, WPARAM wPara
 
 		// 设置当前选中分组
 		if (!pThis->currentGroup_.empty()) {
-			int index = SendMessage(hCombo, CB_FINDSTRINGEXACT, -1,
+			LRESULT index = SendMessage(hCombo, CB_FINDSTRINGEXACT, -1,
 				reinterpret_cast<LPARAM>(pThis->currentGroup_.c_str()));
 			if (index != CB_ERR) {
-				SendMessage(hCombo, CB_SETCURSEL, index, 0);
+				SendMessage(hCombo, CB_SETCURSEL, static_cast<WPARAM>(index), 0);
 			}
 		}
 		return TRUE;
@@ -569,10 +635,10 @@ INT_PTR CALLBACK Proxied::ConfigDialogProc(HWND hDlg, UINT message, WPARAM wPara
 
 			// 保存当前选中分组
 			HWND hCombo = GetDlgItem(hDlg, IDC_PROXY_GROUP);
-			int sel = SendMessage(hCombo, CB_GETCURSEL, 0, 0);
+			LRESULT sel = SendMessage(hCombo, CB_GETCURSEL, 0, 0);
 			if (sel != CB_ERR) {
 				wchar_t name[64];
-				SendMessage(hCombo, CB_GETLBTEXT, sel, reinterpret_cast<LPARAM>(name));
+				SendMessage(hCombo, CB_GETLBTEXT, static_cast<WPARAM>(sel), reinterpret_cast<LPARAM>(name));
 				pThis->currentGroup_ = name;
 			}
 
@@ -690,7 +756,7 @@ void Proxied::LoadProxyGroups() {
 void Proxied::SaveProxyGroups() {
     HKEY hKey;
     if (RegCreateKeyEx(HKEY_CURRENT_USER,
-        _T("Software\Proxied\ProxyGroups"),
+        _T("Software\\Proxied\\ProxyGroups"),
         0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
     
         // 保存分组数量
@@ -707,14 +773,14 @@ void Proxied::SaveProxyGroups() {
     
             RegSetValueEx(hKey, valueName, 0, REG_SZ,
                 reinterpret_cast<const BYTE*>(valueData.c_str()),
-                (valueData.length() + 1) * sizeof(wchar_t));
+                static_cast<DWORD>((valueData.length() + 1) * sizeof(wchar_t)));
         }
     
         // 保存当前分组
         if (!currentGroup_.empty()) {
             RegSetValueEx(hKey, _T("CurrentGroup"), 0, REG_SZ,
                 reinterpret_cast<const BYTE*>(currentGroup_.c_str()),
-                (currentGroup_.length() + 1) * sizeof(wchar_t));
+                static_cast<DWORD>((currentGroup_.length() + 1) * sizeof(wchar_t)));
         }
     
         RegCloseKey(hKey);
@@ -724,7 +790,7 @@ void Proxied::SaveProxyGroups() {
 void Proxied::CheckGitProxySetting() {
     HKEY hKey;
     if (RegOpenKeyEx(HKEY_CURRENT_USER,
-        _T("Software\Proxied"),
+        _T("Software\\Proxied"),
         0, KEY_READ, &hKey) == ERROR_SUCCESS) {
     
         DWORD value = 1; // 默认启用
@@ -741,7 +807,7 @@ void Proxied::CheckGitProxySetting() {
 void Proxied::SetGitProxySetting(bool enable) {
     HKEY hKey;
     if (RegCreateKeyEx(HKEY_CURRENT_USER,
-        _T("Software\Proxied"),
+        _T("Software\\Proxied"),
         0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
     
         DWORD value = enable ? 1 : 0;
@@ -782,5 +848,37 @@ void Proxied::SetGradleProxySetting(bool enable) {
     
         RegCloseKey(hKey);
         gradleProxyEnabled_ = enable;
-    }
-}
+        }
+        }
+
+        void Proxied::CheckWslGitProxySetting() {
+        HKEY hKey;
+        if (RegOpenKeyEx(HKEY_CURRENT_USER,
+            _T("Software\\Proxied"),
+            0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+    
+            DWORD value = 1; // 默认启用
+            DWORD size = sizeof(DWORD);
+            if (RegQueryValueEx(hKey, _T("WslGitProxyEnabled"), NULL, NULL,
+                reinterpret_cast<LPBYTE>(&value), &size) == ERROR_SUCCESS) {
+                wslGitProxyEnabled_ = (value != 0);
+            }
+    
+            RegCloseKey(hKey);
+        }
+        }
+
+        void Proxied::SetWslGitProxySetting(bool enable) {
+        HKEY hKey;
+        if (RegCreateKeyEx(HKEY_CURRENT_USER,
+            _T("Software\\Proxied"),
+            0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+    
+            DWORD value = enable ? 1 : 0;
+            RegSetValueEx(hKey, _T("WslGitProxyEnabled"), 0, REG_DWORD,
+                reinterpret_cast<const BYTE*>(&value), sizeof(value));
+    
+            RegCloseKey(hKey);
+            wslGitProxyEnabled_ = enable;
+        }
+        }

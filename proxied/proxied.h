@@ -33,6 +33,7 @@ private:
     static const int IDM_AUTOSTART = 104;
     static const int IDM_GIT_PROXY = 110;
     static const int IDM_GRADLE_PROXY = 111;
+    static const int IDM_WSL_GIT_PROXY = 112;
     static const int IDC_PROXY_SERVER = 105;
     static const int IDC_PROXY_GROUP = 106;
     static const int IDC_ADD_GROUP = 107;
@@ -50,10 +51,12 @@ private:
     bool autoStart_;
     bool gitProxyEnabled_;
     bool gradleProxyEnabled_;
+    bool wslGitProxyEnabled_;
 
     std::wstring GetGradleConfigPath();
     bool UpdateGradleConfig(bool enable);
     bool UpdateGitConfig(bool enable);
+    bool UpdateWslGitConfig(bool enable);
     HWND hWnd_;
     HANDLE hEvent_;
 
@@ -70,6 +73,8 @@ private:
     void SetGitProxySetting(bool enable);
     void CheckGradleProxySetting();
     void SetGradleProxySetting(bool enable);
+    void CheckWslGitProxySetting();
+    void SetWslGitProxySetting(bool enable);
 
     // 窗口过程
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
