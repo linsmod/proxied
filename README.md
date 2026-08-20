@@ -4,7 +4,7 @@
 
 不止 Windows。它还同步你开发环境里那些"固执地不听系统代理的话"的程序，让你**在一个地方控制所有开发环境的代理**。
 
-![image](https://github.com/user-attachments/assets/20e4a404-3b10-4193-b15e-a44d607673c8)
+![image](docs/proxied.png)
 
 ## 功能
 
