@@ -9,7 +9,6 @@
 ## 功能
 
 - **系统级代理开关**：启用/禁用 Windows 系统代理，实时同步 Windows 设置页（通过监听注册表实现）
-- **代理分组**：内置多组代理配置，托盘菜单一键切换，不用每次去设置页改地址
 - **同步 Git 代理**：启用/禁用时同步写入 `git config --global http.proxy/https.proxy`
 - **同步 Gradle 代理**：启用/禁用时同步写入 `~/.gradle/gradle.properties`
 - **同步 WSL 内 Git 代理**：启用/禁用时通过 `wsl.exe` 同步写入 WSL 内的 git 全局代理配置
