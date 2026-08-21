@@ -28,6 +28,8 @@ Usage:
     python winget_publish.py v1.4.0              # specific tag
     python winget_publish.py --dry-run v1.4.0    # print manifests only
     python winget_publish.py --no-pr v1.4.0      # push branch, skip the PR
+    python winget_publish.py --skip-install-check v1.4.0  # validate only,
+                                                          # no install test
 """
 
 import argparse
@@ -48,7 +50,7 @@ import urllib.request
 REPO = "linsmod/proxied"
 UPSTREAM = "microsoft/winget-pkgs"
 PACKAGE_ID = "linsmod.proxied"
-MANIFEST_VERSION = "1.4.0"
+MANIFEST_VERSION = "1.5.0"
 X64_ASSET_RE = re.compile(r"^proxied\.exe$")
 WINGET_PKGS_FORK = "winget-pkgs"
 
@@ -232,13 +234,102 @@ def run_winget(args):
         fail("could not run winget: %s" % exc)
 
 
-def validate_with_winget(manifest_dir):
+def _stop_local_proxied():
+    """Terminate a locally running proxied.exe (e.g. the tray app).
+
+    A running instance can lock the executable and make the winget
+    install/uninstall smoke test fail. Returns the executable path when
+    a process was running (so the caller can restart it afterwards),
+    else None.
+
+    Implemented with ctypes (CreateToolhelp32Snapshot + TerminateProcess)
+    so it does not depend on powershell/taskkill being on PATH.
+    """
+    if not sys.platform.startswith("win32"):
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    TH32CS_SNAPPROCESS = 0x00000002
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    PROCESS_TERMINATE = 0x0001
+    MAX_PATH = 260
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_void_p),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_wchar * MAX_PATH),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snapshot == wintypes.HANDLE(-1).value:
+        return None
+    pid = None
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        found = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while found:
+            if entry.szExeFile.lower() == "proxied.exe":
+                pid = entry.th32ProcessID
+                break
+            found = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    if pid is None:
+        return None
+
+    # resolve the executable path so it can be restarted afterwards
+    path = None
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                                  False, pid)
+    if handle:
+        buf = ctypes.create_unicode_buffer(MAX_PATH)
+        size = wintypes.DWORD(MAX_PATH)
+        if kernel32.QueryFullProcessImageNameW(handle, 0, buf,
+                                               ctypes.byref(size)):
+            path = buf.value
+        kernel32.CloseHandle(handle)
+
+    log("stopping locally running proxied.exe%s for the install smoke "
+        "test ..." % (" (%s)" % path if path else ""))
+    handle = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+    if handle:
+        kernel32.TerminateProcess(handle, 0)
+        kernel32.CloseHandle(handle)
+    else:
+        log("warning: could not open proxied.exe (pid %d) for termination"
+            % pid)
+    return path
+
+
+def validate_with_winget(manifest_dir, skip_install_check=False):
     """Smoke-test the rendered manifests before publishing anything.
 
     Runs `winget validate` (schema check) followed by `winget install`
     (a real install driven by the manifests, downloading the release
     asset) and finally removes the package again. Any failure aborts the
     publish, so nothing is pushed when the manifests are broken.
+
+    A locally running proxied.exe is stopped before the install test and
+    restarted afterwards, so a locked executable cannot fail the test.
+
+    With skip_install_check only the schema check is performed; the
+    install/uninstall round-trip (which downloads the release asset) is
+    skipped. Use this when the network cannot reach the release asset
+    but you still want the manifests validated.
     """
     if not sys.platform.startswith("win32"):
         fail("winget validation requires Windows "
@@ -252,6 +343,13 @@ def validate_with_winget(manifest_dir):
 
     check(run_winget(["validate", "--manifest", manifest_dir]), "validate")
     log("winget validate OK: manifests are valid")
+
+    if skip_install_check:
+        log("skipping winget install/uninstall smoke test "
+            "(--skip-install-check)")
+        return
+
+    proxied_path = _stop_local_proxied()
 
     check(run_winget([
         "install", "--manifest", manifest_dir,
@@ -276,6 +374,10 @@ def validate_with_winget(manifest_dir):
             "with: winget uninstall --id %s" % (proc.returncode, PACKAGE_ID))
     else:
         log("winget uninstall OK: test package removed")
+
+    if proxied_path:
+        log("restarting proxied.exe (%s)" % proxied_path)
+        subprocess.Popen([proxied_path])
 
 
 def ensure_fork(token, fork_owner):
@@ -418,6 +520,10 @@ def main():
                     help="render manifests and exit without any API writes")
     ap.add_argument("--no-pr", action="store_true",
                     help="push the branch but do not open a PR")
+    ap.add_argument("--skip-install-check", action="store_true",
+                    help="skip the winget install/uninstall smoke test "
+                         "(which downloads the release asset); only "
+                         "winget validate is run")
     ap.add_argument("--fork-owner", default=None,
                     help="account that owns the winget-pkgs fork "
                          "(default: authenticated user)")
@@ -458,7 +564,7 @@ def main():
                       encoding="utf-8", newline="\n") as fh:
                 fh.write(content)
         log("rendered manifests written to %s for validation" % tmpdir)
-        validate_with_winget(tmpdir)
+        validate_with_winget(tmpdir, args.skip_install_check)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
