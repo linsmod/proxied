@@ -1,0 +1,21 @@
+#include <windows.h>
+#include "StringResources.h"
+
+STRINGTABLE
+BEGIN
+    IDS_ENABLE_PROXY          "启用代理"
+    IDS_DISABLE_PROXY         "禁用代理"
+    IDS_AUTOSTART             "开机自启"
+    IDS_GIT_PROXY_SYNC        "强制使随: Git"
+    IDS_WSL_GIT_PROXY_SYNC    "强制使随: Git (WSL)"
+    IDS_GRADLE_PROXY_SYNC     "强制使随: Gradle"
+    IDS_ABOUT                 "关于 Proxied控制器..."
+    IDS_EXIT                  "退出"
+    IDS_LOADING               "Proxied - 加载中..."
+    IDS_PROCESSING            "Proxied - 正在处理..."
+    IDS_PROXY_ENABLED         "Proxied - 代理已启用"
+    IDS_PROXY_DISABLED        "Proxied - 代理已禁用"
+    IDS_CANNOT_START_TASK     "无法启动后台任务。"
+    IDS_WSL_GIT_ERROR         "无法修改 WSL 内 Git 的代理设置，请检查 WSL 与 Git 是否已安装。"
+    IDS_APP_TITLE             "代理使随控制器（Proxied）"
+END

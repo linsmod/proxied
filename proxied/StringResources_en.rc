@@ -1,0 +1,22 @@
+#include <windows.h>
+#include "StringResources.h"
+
+STRINGTABLE
+BEGIN
+    IDS_ENABLE_PROXY          "Enable Proxy"
+    IDS_DISABLE_PROXY         "Disable Proxy"
+    IDS_AUTOSTART             "Start with Windows"
+    IDS_GIT_PROXY_SYNC        "Make Git follow proxy changes"
+    IDS_WSL_GIT_PROXY_SYNC    "Make Git (WSL) follow proxy changes"
+    IDS_GRADLE_PROXY_SYNC     "Make Gradle follow proxy changes"
+    IDS_ABOUT                 "About Proxied"
+    IDS_EXIT                  "Exit"
+    IDS_LOADING               "Proxied - Loading..."
+    IDS_PROCESSING            "Proxied - Processing..."
+    IDS_PROXY_ENABLED         "Proxied - Proxy Enabled"
+    IDS_PROXY_DISABLED        "Proxied - Proxy Disabled"
+    IDS_CANNOT_START_TASK     "Cannot start background task."
+    IDS_WSL_GIT_ERROR         "Cannot modify WSL Git proxy settings. Please check if WSL and Git are installed."
+    IDS_APP_TITLE             "Proxied"
+
+END

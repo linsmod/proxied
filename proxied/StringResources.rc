@@ -1,0 +1,17 @@
+#include <windows.h>
+#include "StringResources.h"
+
+// 多语言字符串表主入口：三种语言版本同时编译进 exe，
+// LoadString 在运行时按系统 UI 语言自动选择最匹配的版本。
+
+// 中性语言（英文兜底）：保证非中文/英文系统也能加载到字符串
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+#include "StringResources_en.rc"
+
+// 英文（美国）
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+#include "StringResources_en.rc"
+
+// 简体中文
+LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
+#include "StringResources_zh.rc"

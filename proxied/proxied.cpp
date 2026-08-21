@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "proxied.h"
 #include "Resource.h"
+#include "StringResources.h"
 #include "version.h"
 #include <fstream>
 #include <shellapi.h>
@@ -24,6 +25,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 	InitCommonControls();
 
 	// 单实例：若已有一个实例在运行则直接退出，避免重复托盘图标
+	// 互斥锁句柄交由 Proxied 管理（Shift+Exit 重启时需先释放再启动新实例）
 	HANDLE hSingleInstance = CreateMutex(NULL, FALSE,
 		_T("Proxied_SingleInstance_{9F2C1A3B-7E4D-4B8A-9C1E-2D5F6A8B0C3E}"));
 	if (GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -34,11 +36,9 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 	}
 
 	Proxied app;
+	app.SetSingleInstanceHandle(hSingleInstance);
 	app.Run();
 
-	if (hSingleInstance) {
-		CloseHandle(hSingleInstance);
-	}
 	return 0;
 }
 Proxied::Proxied() :
@@ -53,8 +53,65 @@ Proxied::Proxied() :
   busyFrame_(0),
 	hWnd_(NULL),
 	hPopupMenu_(NULL),
-	hEvent_(NULL) {
+	hEvent_(NULL),
+	hResourceInstance_(NULL),
+	hSingleInstance_(NULL){
 	memset(&nid_, 0, sizeof(nid_));
+	DetectLanguage();
+}
+
+void Proxied::DetectLanguage() {
+	// 字符串/对话框资源以多语言形式编译进主模块（中性英文兜底 + 英文 + 简体中文），
+	// LoadString 与 DialogBox 会按系统 UI 语言自动选择最匹配的版本，无需手动切换资源实例。
+	hResourceInstance_ = GetModuleHandle(NULL);
+}
+
+std::wstring Proxied::LoadStringByLang(UINT id, LANGID lang) {
+	// STRINGTABLE 块格式：资源名 = (id >> 4) + 1，块内偏移 = id & 0xF，
+	// 每项一个 WORD 长度前缀（字符数）+ UTF-16 内容
+	HRSRC hRes = FindResourceExW(hResourceInstance_, RT_STRING,
+		MAKEINTRESOURCEW((id >> 4) + 1), lang);
+	if (!hRes) {
+		return L"";
+	}
+	HGLOBAL hData = LoadResource(hResourceInstance_, hRes);
+	if (!hData) {
+		return L"";
+	}
+	const WORD* p = static_cast<const WORD*>(LockResource(hData));
+	if (!p) {
+		return L"";
+	}
+	// 跳过目标字符串之前的项（每项 = 1 个长度前缀 + 内容）
+	DWORD idx = id & 0xF;
+	for (DWORD i = 0; i < idx; ++i) {
+		p += 1 + *p;
+	}
+	WORD len = *p;
+	return std::wstring(reinterpret_cast<const wchar_t*>(p + 1), len);
+}
+
+std::wstring Proxied::LoadLocalizedString(UINT id) {
+	if (!hResourceInstance_) {
+		return L"";
+	}
+	// LoadString 的语言回退在本机不可靠（中文系统仍返回英文兜底块），
+	// 改为按明确优先级用 FindResourceExW 精确定位：
+	// 线程 UI 语言 -> 用户 UI 语言 -> 系统 UI 语言 -> 英文 -> 中性
+	LANGID langs[] = {
+		GetThreadUILanguage(),
+		GetUserDefaultUILanguage(),
+		GetSystemDefaultUILanguage(),
+		MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US),
+		MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
+	};
+	for (LANGID lang : langs) {
+		std::wstring s = LoadStringByLang(id, lang);
+		if (!s.empty()) {
+			return s;
+		}
+	}
+	return L"";
 }
 
 Proxied::~Proxied() {
@@ -66,6 +123,9 @@ Proxied::~Proxied() {
 	}
 	if (hEvent_) {
 		CloseHandle(hEvent_);
+	}
+	if (hSingleInstance_) {
+		CloseHandle(hSingleInstance_);
 	}
 }
 
@@ -120,7 +180,7 @@ void Proxied::Run() {
 	opBusy_ = true;
 	SetTimer(hWnd_, BUSY_TIMER_ID, BUSY_INTERVAL, NULL);
 	busyFrame_ = 0;
-	_tcscpy_s(nid_.szTip, ARRAYSIZE(nid_.szTip), _T("Proxied - 正在处理..."));
+	_tcscpy_s(nid_.szTip, ARRAYSIZE(nid_.szTip), LoadLocalizedString(IDS_PROCESSING).c_str());
 	SetTrayIcon(MakeBusyIcon(0));
 	{
 		OpCtx* ctx = new OpCtx{ this, IDM_SYNC, GetTickCount() };
@@ -167,19 +227,19 @@ void Proxied::Run() {
 void Proxied::InitTrayIcon() {
 	// 创建托盘菜单
 	hPopupMenu_ = CreatePopupMenu();
-	AppendMenu(hPopupMenu_, MF_STRING | 0, IDM_ENABLE, _T("启用代理"));
-	AppendMenu(hPopupMenu_, MF_STRING | 0, IDM_DISABLE, _T("禁用代理"));
+	AppendMenu(hPopupMenu_, MF_STRING | 0, IDM_ENABLE, LoadLocalizedString(IDS_ENABLE_PROXY).c_str());
+	AppendMenu(hPopupMenu_, MF_STRING | 0, IDM_DISABLE, LoadLocalizedString(IDS_DISABLE_PROXY).c_str());
 	AppendMenu(hPopupMenu_, MF_SEPARATOR, 0, NULL);
-	//AppendMenu(hPopupMenu_, MF_STRING, IDM_CONFIG, _T("配置代理..."));
-	//AppendMenu(hPopupMenu_, MF_SEPARATOR, 0, NULL);
-	AppendMenu(hPopupMenu_, MF_STRING | (autoStart_ ? MF_CHECKED : 0), IDM_AUTOSTART, _T("开机自启"));
-	AppendMenu(hPopupMenu_, MF_STRING | (gitProxyEnabled_ ? MF_CHECKED : 0), IDM_GIT_PROXY, _T("当启用或禁用时也修改Git的全局代理设置"));
-	AppendMenu(hPopupMenu_, MF_STRING | (gradleProxyEnabled_ ? MF_CHECKED : 0), IDM_GRADLE_PROXY, _T("当启用或禁用时也修改Gradle的代理设置"));
-	AppendMenu(hPopupMenu_, MF_STRING | (wslGitProxyEnabled_ ? MF_CHECKED : 0), IDM_WSL_GIT_PROXY, _T("当启用或禁用时也修改WSL内Git的代理设置"));
+	AppendMenu(hPopupMenu_, MF_STRING | (autoStart_ ? MF_CHECKED : 0), IDM_AUTOSTART, LoadLocalizedString(IDS_AUTOSTART).c_str());
 	AppendMenu(hPopupMenu_, MF_SEPARATOR, 0, NULL);
-	AppendMenu(hPopupMenu_, MF_STRING, IDM_GITHUB,
-		(std::wstring(_T("关于 ")) + PROXIED_VERSION).c_str());
-	AppendMenu(hPopupMenu_, MF_STRING, IDM_EXIT, _T("退出"));
+	AppendMenu(hPopupMenu_, MF_STRING | (gitProxyEnabled_ ? MF_CHECKED : 0), IDM_GIT_PROXY, LoadLocalizedString(IDS_GIT_PROXY_SYNC).c_str());
+	AppendMenu(hPopupMenu_, MF_STRING | (gradleProxyEnabled_ ? MF_CHECKED : 0), IDM_GRADLE_PROXY, LoadLocalizedString(IDS_GRADLE_PROXY_SYNC).c_str());
+	AppendMenu(hPopupMenu_, MF_STRING | (wslGitProxyEnabled_ ? MF_CHECKED : 0), IDM_WSL_GIT_PROXY, LoadLocalizedString(IDS_WSL_GIT_PROXY_SYNC).c_str());
+	AppendMenu(hPopupMenu_, MF_SEPARATOR, 0, NULL);
+	AppendMenu(hPopupMenu_, MF_STRING, 0, PROXIED_VERSION);
+	AppendMenu(hPopupMenu_, MF_SEPARATOR, 0, NULL);
+	AppendMenu(hPopupMenu_, MF_STRING, IDM_GITHUB,LoadLocalizedString(IDS_ABOUT).c_str());
+	AppendMenu(hPopupMenu_, MF_STRING, IDM_EXIT, LoadLocalizedString(IDS_EXIT).c_str());
 
 	// 初始化托盘图标
 	nid_.cbSize = sizeof(nid_);
@@ -189,9 +249,34 @@ void Proxied::InitTrayIcon() {
 	nid_.uCallbackMessage = WM_TRAYICON;
 	nid_.hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_SMALL));
 	_tcscpy_s(nid_.szTip, sizeof(nid_.szTip) / sizeof(TCHAR),
-		_T("Proxied - Loading..."));
+		LoadLocalizedString(IDS_LOADING).c_str());
 
 	Shell_NotifyIcon(NIM_ADD, &nid_);
+}
+
+HBITMAP Proxied::CreateSectionIconBitmap() {
+	// 加载程序图标（16x16）画到白色背景位图：白色 = 菜单透明色，图标彩色显示
+	HICON hIcon = static_cast<HICON>(LoadImage(hResourceInstance_,
+		MAKEINTRESOURCE(IDI_PROXIED), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR));
+	if (!hIcon) {
+		return NULL;
+	}
+	HDC hdcScreen = GetDC(NULL);
+	HDC hdc = CreateCompatibleDC(hdcScreen);
+	HBITMAP hBmp = CreateCompatibleBitmap(hdcScreen, 16, 16);
+	if (hdc && hBmp) {
+		HBITMAP hOld = static_cast<HBITMAP>(SelectObject(hdc, hBmp));
+		RECT rc = { 0, 0, 16, 16 };
+		FillRect(hdc, &rc, static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
+		DrawIconEx(hdc, 0, 0, hIcon, 16, 16, 0, NULL, DI_NORMAL);
+		SelectObject(hdc, hOld);
+	}
+	if (hdc) {
+		DeleteDC(hdc);
+	}
+	ReleaseDC(NULL, hdcScreen);
+	DestroyIcon(hIcon);
+	return hBmp;
 }
 
 void Proxied::SetTrayIcon(HICON hIcon) {
@@ -622,7 +707,7 @@ void Proxied::ApplyChanges() {
 
 	// 更新托盘提示与图标（busy 时由旋转图标接管，跳过以免闪烁）
 	_tcscpy_s(nid_.szTip, ARRAYSIZE(nid_.szTip),
-		proxyEnabled ? _T("Proxied - 代理已启用") : _T("Proxied - 代理已禁用"));
+		proxyEnabled ? LoadLocalizedString(IDS_PROXY_ENABLED).c_str() : LoadLocalizedString(IDS_PROXY_DISABLED).c_str());
 	if (!opBusy_) {
 		HICON hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(proxyEnabled ? IDI_SMALL2 : IDI_SMALL));
 		SetTrayIcon(hIcon);
@@ -740,8 +825,23 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 			}
 			break;
 		case IDM_EXIT:
-			Shell_NotifyIcon(NIM_DELETE, &pThis->nid_);
-			PostQuitMessage(0);
+			if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
+				// 按住 SHIFT：重启程序。先释放单实例锁并移除托盘图标，
+				// 再启动新实例，避免新进程因互斥锁未释放而直接退出
+				if (pThis->hSingleInstance_) {
+					CloseHandle(pThis->hSingleInstance_);
+					pThis->hSingleInstance_ = NULL;
+				}
+				Shell_NotifyIcon(NIM_DELETE, &pThis->nid_);
+				wchar_t exePath[MAX_PATH];
+				GetModuleFileNameW(NULL, exePath, MAX_PATH);
+				ShellExecuteW(NULL, L"open", exePath, NULL, NULL, SW_SHOWNORMAL);
+				PostQuitMessage(0);
+			}
+			else {
+				Shell_NotifyIcon(NIM_DELETE, &pThis->nid_);
+				PostQuitMessage(0);
+			}
 			break;
 		case IDM_AUTOSTART:
 			pThis->SetAutoStart(!pThis->autoStart_);
@@ -761,7 +861,7 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 			// 启动旋转图标计时器，立即显示第一帧
 			SetTimer(pThis->hWnd_, BUSY_TIMER_ID, BUSY_INTERVAL, NULL);
 			pThis->busyFrame_ = 0;
-			_tcscpy_s(pThis->nid_.szTip, ARRAYSIZE(pThis->nid_.szTip), _T("Proxied - 正在处理..."));
+			_tcscpy_s(pThis->nid_.szTip, ARRAYSIZE(pThis->nid_.szTip), pThis->LoadLocalizedString(IDS_PROCESSING).c_str());
 			pThis->SetTrayIcon(pThis->MakeBusyIcon(0));
 			{
 				OpCtx* ctx = new OpCtx{ pThis, LOWORD(wParam), GetTickCount() };
@@ -775,16 +875,10 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 					KillTimer(pThis->hWnd_, BUSY_TIMER_ID);
 					pThis->SetTrayIcon(LoadIcon(GetModuleHandle(NULL),
 						MAKEINTRESOURCE(pThis->proxyEnabled_ ? IDI_SMALL2 : IDI_SMALL)));
-					MessageBox(hWnd, _T("无法启动后台任务。"),
-						_T("Proxied"), MB_OK | MB_ICONWARNING);
+					MessageBox(hWnd, pThis->LoadLocalizedString(IDS_CANNOT_START_TASK).c_str(),
+						pThis->LoadLocalizedString(IDS_APP_TITLE).c_str(), MB_OK | MB_ICONWARNING);
 				}
 			}
-			break;
-		case IDM_CONFIG:
-			DialogBoxParam(GetModuleHandle(NULL),
-				MAKEINTRESOURCE(IDD_PROXY_CONFIG),
-				hWnd, ConfigDialogProc,
-				reinterpret_cast<LPARAM>(pThis));
 			break;
 		}
 		break;
@@ -803,8 +897,8 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 					pThis->wslGitProxyEnabled_ ? MF_CHECKED : MF_UNCHECKED);
 			}
 			else {
-				MessageBox(hWnd, _T("无法修改 WSL 内 Git 的代理设置，请检查 WSL 与 Git 是否已安装。"),
-					_T("Proxied"), MB_OK | MB_ICONWARNING);
+				MessageBox(hWnd, pThis->LoadLocalizedString(IDS_WSL_GIT_ERROR).c_str(),
+					pThis->LoadLocalizedString(IDS_APP_TITLE).c_str(), MB_OK | MB_ICONWARNING);
 			}
 		}
 		break;
@@ -823,206 +917,6 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 		return DefWindowProc(hWnd, message, wParam, lParam);
 	}
 	return 0;
-}
-
-INT_PTR CALLBACK Proxied::ConfigDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam) {
-	Proxied* pThis = nullptr;
-
-	switch (message) {
-	case WM_INITDIALOG: {
-		// 设置标准Windows样式
-		SetWindowLongPtr(hDlg, GWL_EXSTYLE,
-			GetWindowLongPtr(hDlg, GWL_EXSTYLE) | WS_EX_CLIENTEDGE);
-
-		SetWindowLongPtr(hDlg, GWLP_USERDATA, lParam);
-		pThis = reinterpret_cast<Proxied*>(lParam);
-
-		// 初始化对话框控件
-		SetDlgItemText(hDlg, IDC_PROXY_SERVER, pThis->proxyServer_.c_str());
-
-		// 加载分组配置
-		pThis->LoadProxyGroups();
-
-		// 初始化分组下拉框
-		HWND hCombo = GetDlgItem(hDlg, IDC_PROXY_GROUP);
-		for (const auto& group : pThis->proxyGroups_) {
-			SendMessage(hCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(group.name.c_str()));
-		}
-
-		// 设置当前选中分组
-		if (!pThis->currentGroup_.empty()) {
-			LRESULT index = SendMessage(hCombo, CB_FINDSTRINGEXACT, -1,
-				reinterpret_cast<LPARAM>(pThis->currentGroup_.c_str()));
-			if (index != CB_ERR) {
-				SendMessage(hCombo, CB_SETCURSEL, static_cast<WPARAM>(index), 0);
-			}
-		}
-		return TRUE;
-	}
-
-	case WM_COMMAND:
-		pThis = reinterpret_cast<Proxied*>(GetWindowLongPtr(hDlg, GWLP_USERDATA));
-		if (!pThis) return FALSE;
-
-		switch (LOWORD(wParam)) {
-		case IDOK: {
-			// 保存配置
-			wchar_t server[256];
-			GetDlgItemText(hDlg, IDC_PROXY_SERVER, server, 256);
-			pThis->proxyServer_ = server;
-
-			// 保存当前选中分组
-			HWND hCombo = GetDlgItem(hDlg, IDC_PROXY_GROUP);
-			LRESULT sel = SendMessage(hCombo, CB_GETCURSEL, 0, 0);
-			if (sel != CB_ERR) {
-				wchar_t name[64];
-				SendMessage(hCombo, CB_GETLBTEXT, static_cast<WPARAM>(sel), reinterpret_cast<LPARAM>(name));
-				pThis->currentGroup_ = name;
-			}
-
-			pThis->SaveProxyGroups();
-			EndDialog(hDlg, IDOK);
-			return TRUE;
-		}
-
-		case IDC_ADD_GROUP: {
-			// 添加新分组
-			wchar_t name[64] = { 0 };
-			if (DialogBoxParam(GetModuleHandle(NULL),
-				MAKEINTRESOURCE(IDD_ADD_GROUP),
-				hDlg, AddGroupDialogProc,
-				reinterpret_cast<LPARAM>(name)) == IDOK) {
-
-				// 添加到分组列表
-				if (pThis->proxyGroups_.size() < static_cast<size_t>(10)) {
-					Proxied::ProxyGroup group;
-					group.name = name;
-					group.server = pThis->proxyServer_;
-					pThis->proxyGroups_.push_back(group);
-
-					// 更新下拉框
-					HWND hCombo = GetDlgItem(hDlg, IDC_PROXY_GROUP);
-					SendMessage(hCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(name));
-					SendMessage(hCombo, CB_SETCURSEL, pThis->proxyGroups_.size() - 1, 0);
-				}
-			}
-			return TRUE;
-		}
-
-		case IDCANCEL:
-			EndDialog(hDlg, IDCANCEL);
-			return TRUE;
-		}
-		break;
-	}
-	return FALSE;
-}
-
-INT_PTR CALLBACK Proxied::AddGroupDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam) {
-	switch (message) {
-	case WM_INITDIALOG:
-		// 设置标准Windows样式
-		SetWindowLongPtr(hDlg, GWL_EXSTYLE,
-			GetWindowLongPtr(hDlg, GWL_EXSTYLE) | WS_EX_CLIENTEDGE);
-		return TRUE;
-
-	case WM_COMMAND:
-		switch (LOWORD(wParam)) {
-		case IDOK: {
-			wchar_t* name = reinterpret_cast<wchar_t*>(lParam);
-			GetDlgItemText(hDlg, IDC_GROUP_NAME, name, 64);
-			EndDialog(hDlg, IDOK);
-			return TRUE;
-		}
-
-		case IDCANCEL:
-			EndDialog(hDlg, IDCANCEL);
-			return TRUE;
-		}
-		break;
-	}
-	return FALSE;
-}
-
-void Proxied::LoadProxyGroups() {
-	HKEY hKey;
-	if (RegOpenKeyEx(HKEY_CURRENT_USER,
-		_T("Software\\Proxied\\ProxyGroups"),
-		0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-
-		// 读取分组数量
-		DWORD count = 0;
-		DWORD size = sizeof(DWORD);
-		if (RegQueryValueEx(hKey, _T("Count"), NULL, NULL,
-			reinterpret_cast<LPBYTE>(&count), &size) == ERROR_SUCCESS) {
-
-			proxyGroups_.resize(min(static_cast<size_t>(count), static_cast<size_t>(10)));
-
-			// 读取每个分组
-			for (size_t i = 0; i < proxyGroups_.size(); i++) {
-				wchar_t valueName[32];
-				_stprintf_s(valueName, 32, _T("Group%zu"), i);
-
-				wchar_t valueData[320]; // name + server
-				size = sizeof(valueData);
-				if (RegQueryValueEx(hKey, valueName, NULL, NULL,
-					reinterpret_cast<LPBYTE>(valueData), &size) == ERROR_SUCCESS) {
-
-					// 格式: "name|server"
-					wchar_t* sep = wcschr(valueData, '|');
-					if (sep) {
-						*sep = '\0';
-						proxyGroups_[i].name = valueData;
-						proxyGroups_[i].server = sep + 1;
-					}
-				}
-			}
-		}
-
-		// 读取当前分组
-		wchar_t group[64];
-		size = sizeof(group);
-		if (RegQueryValueEx(hKey, _T("CurrentGroup"), NULL, NULL,
-			reinterpret_cast<LPBYTE>(group), &size) == ERROR_SUCCESS) {
-			currentGroup_ = group;
-		}
-
-		RegCloseKey(hKey);
-	}
-}
-
-void Proxied::SaveProxyGroups() {
-    HKEY hKey;
-    if (RegCreateKeyEx(HKEY_CURRENT_USER,
-        _T("Software\\Proxied\\ProxyGroups"),
-        0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
-    
-        // 保存分组数量
-        DWORD count = static_cast<DWORD>(proxyGroups_.size());
-        RegSetValueEx(hKey, _T("Count"), 0, REG_DWORD,
-            reinterpret_cast<const BYTE*>(&count), sizeof(count));
-    
-        // 保存每个分组
-        for (size_t i = 0; i < proxyGroups_.size(); i++) {
-            wchar_t valueName[32];
-            _stprintf_s(valueName, 32, _T("Group%zu"), i);
-    
-            std::wstring valueData = proxyGroups_[i].name + _T("|") + proxyGroups_[i].server;
-    
-            RegSetValueEx(hKey, valueName, 0, REG_SZ,
-                reinterpret_cast<const BYTE*>(valueData.c_str()),
-                static_cast<DWORD>((valueData.length() + 1) * sizeof(wchar_t)));
-        }
-    
-        // 保存当前分组
-        if (!currentGroup_.empty()) {
-            RegSetValueEx(hKey, _T("CurrentGroup"), 0, REG_SZ,
-                reinterpret_cast<const BYTE*>(currentGroup_.c_str()),
-                static_cast<DWORD>((currentGroup_.length() + 1) * sizeof(wchar_t)));
-        }
-    
-        RegCloseKey(hKey);
-    }
 }
 
 void Proxied::CheckGitProxySetting() {

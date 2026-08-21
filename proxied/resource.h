@@ -2,8 +2,6 @@
 // Microsoft Visual C++ 生成的包含文件。
 // 使用者 proxied.rc
 
-#define IDS_APP_TITLE			103
-
 #define IDR_MAINFRAME			128
 #define IDD_PROXIED_DIALOG	102
 #define IDD_ABOUTBOX			103
@@ -17,18 +15,9 @@
 #define IDC_STATIC				-1
 #endif
 
-// 代理配置对话框相关定义
-#define IDD_PROXY_CONFIG        200
-#define IDD_ADD_GROUP           201
-#define IDC_PROXY_SERVER        202
-#define IDC_PROXY_GROUP         203
-#define IDC_ADD_GROUP           204
-#define IDC_GROUP_NAME          205
-
 // 菜单命令ID
 #define IDM_ENABLE              101
 #define IDM_DISABLE             102
-#define IDM_CONFIG              103
 #define IDM_AUTOSTART           104
 #define IDM_EXIT                105
 #define IDM_GIT_PROXY           110

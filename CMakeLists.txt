@@ -9,7 +9,7 @@ add_executable(proxied WIN32
     proxied/proxied.cpp
     proxied/pch.cpp
     proxied/proxied.rc
-    proxied/proxied_dialogs.rc
+    proxied/StringResources.rc
 )
 
 # 设置预编译头文件

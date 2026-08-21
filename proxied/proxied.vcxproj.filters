@@ -43,9 +43,6 @@
     <ResourceCompile Include="proxied.rc">
       <Filter>资源文件</Filter>
     </ResourceCompile>
-    <ResourceCompile Include="proxied_dialogs.rc">
-      <Filter>资源文件</Filter>
-    </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
     <Image Include="small.ico">
