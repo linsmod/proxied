@@ -25,6 +25,7 @@ private:
 
     // 常量定义
     static const UINT WM_TRAYICON = WM_USER + 1;
+    static const UINT WM_WSL_RESULT = WM_USER + 2;
     static const int IDM_GITHUB = 109;
     static const int IDM_EXIT = 100;
     static const int IDM_ENABLE = 101;
@@ -52,6 +53,8 @@ private:
     bool gitProxyEnabled_;
     bool gradleProxyEnabled_;
     bool wslGitProxyEnabled_;
+    bool wslAvailable_;
+    bool wslBusy_;
 
     std::wstring GetGradleConfigPath();
     bool UpdateGradleConfig(bool enable);
@@ -75,6 +78,10 @@ private:
     void SetGradleProxySetting(bool enable);
     void CheckWslGitProxySetting();
     void SetWslGitProxySetting(bool enable);
+    void CheckWslAvailability();
+    void LogMenuAction(const std::wstring& action, DWORD elapsedMs);
+    static std::wstring MenuName(int id);
+    static DWORD WINAPI WslToggleThread(LPVOID lpParam);
 
     // 窗口过程
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);

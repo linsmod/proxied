@@ -33,6 +33,22 @@ target_link_libraries(proxied PRIVATE
     ole32
 )
 
+# 生成版本头文件（每次构建时根据 git 标签/提交生成）
+add_custom_target(generate_version ALL
+    COMMAND ${CMAKE_COMMAND} -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_version.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/version.h
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/version.h
+    COMMENT "Generating version header from git"
+)
+add_dependencies(proxied generate_version)
+
+# 让 version.h（生成到构建目录）可被源文件包含
+target_include_directories(proxied PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR}
+)
+
 # 设置 Windows 子系统
 set_target_properties(proxied PROPERTIES
     LINK_FLAGS "/SUBSYSTEM:WINDOWS"

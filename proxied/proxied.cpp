@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "proxied.h"
 #include "Resource.h"
+#include "version.h"
 #include <fstream>
 #include <shellapi.h>
 #include <tchar.h>
@@ -17,16 +18,33 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 	//icex.dwICC = ICC_WIN95_CLASSES;
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 	InitCommonControls();
+
+	// 单实例：若已有一个实例在运行则直接退出，避免重复托盘图标
+	HANDLE hSingleInstance = CreateMutex(NULL, FALSE,
+		_T("Proxied_SingleInstance_{9F2C1A3B-7E4D-4B8A-9C1E-2D5F6A8B0C3E}"));
+	if (GetLastError() == ERROR_ALREADY_EXISTS) {
+		if (hSingleInstance) {
+			CloseHandle(hSingleInstance);
+		}
+		return 0;
+	}
+
 	Proxied app;
 	app.Run();
+
+	if (hSingleInstance) {
+		CloseHandle(hSingleInstance);
+	}
 	return 0;
 }
 Proxied::Proxied() :
 	isUpdating(false),
 	autoStart_(false),
-	gitProxyEnabled_(true),
-	gradleProxyEnabled_(true),
-	wslGitProxyEnabled_(true),
+  gitProxyEnabled_(true),
+  gradleProxyEnabled_(true),
+  wslGitProxyEnabled_(false),
+  wslAvailable_(false),
+  wslBusy_(false),
 	hWnd_(NULL),
 	hPopupMenu_(NULL),
 	hEvent_(NULL) {
@@ -71,6 +89,7 @@ void Proxied::Run() {
 	CheckGitProxySetting();
 	CheckGradleProxySetting();
 	CheckWslGitProxySetting();
+	CheckWslAvailability();
 
 	InitTrayIcon();
 
@@ -116,7 +135,8 @@ void Proxied::InitTrayIcon() {
 	AppendMenu(hPopupMenu_, MF_STRING | (gradleProxyEnabled_ ? MF_CHECKED : 0), IDM_GRADLE_PROXY, _T("当启用或禁用时也修改Gradle的代理设置"));
 	AppendMenu(hPopupMenu_, MF_STRING | (wslGitProxyEnabled_ ? MF_CHECKED : 0), IDM_WSL_GIT_PROXY, _T("当启用或禁用时也修改WSL内Git的代理设置"));
 	AppendMenu(hPopupMenu_, MF_SEPARATOR, 0, NULL);
-	AppendMenu(hPopupMenu_, MF_STRING, IDM_GITHUB, _T("关于 V1.1"));
+	AppendMenu(hPopupMenu_, MF_STRING, IDM_GITHUB,
+		(std::wstring(_T("关于 ")) + PROXIED_VERSION).c_str());
 	AppendMenu(hPopupMenu_, MF_STRING, IDM_EXIT, _T("退出"));
 
 	// 初始化托盘图标
@@ -441,7 +461,7 @@ void Proxied::SyncSettings() {
         if (gitProxyEnabled_) {
             UpdateGitConfig(true);
         }
-        if (wslGitProxyEnabled_) {
+        if (wslAvailable_ && wslGitProxyEnabled_) {
             UpdateWslGitConfig(true);
         }
     } else {
@@ -453,7 +473,7 @@ void Proxied::SyncSettings() {
         if (gitProxyEnabled_) {
             UpdateGitConfig(false);
         }
-        if (wslGitProxyEnabled_) {
+        if (wslAvailable_ && wslGitProxyEnabled_) {
             UpdateWslGitConfig(false);
         }
     }
@@ -503,6 +523,22 @@ void Proxied::HandleRegistryChanges(HANDLE hEvent) {
 
 	RegCloseKey(hKey);
 }
+
+struct WslToggleCtx {
+    Proxied* self;
+    bool enable;
+};
+
+DWORD WINAPI Proxied::WslToggleThread(LPVOID lpParam) {
+    WslToggleCtx* ctx = reinterpret_cast<WslToggleCtx*>(lpParam);
+    // 唯一的 wsl 命令：直接尝试修改 WSL 内 Git 代理
+    bool ok = ctx->self->UpdateWslGitConfig(ctx->enable);
+    PostMessage(ctx->self->hWnd_, WM_WSL_RESULT,
+        ok ? 1 : 0, ctx->enable ? 1 : 0);
+    delete ctx;
+    return 0;
+}
+
 LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
 	Proxied* pThis = reinterpret_cast<Proxied*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
 
@@ -519,9 +555,10 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 	}
 					HKEY hKey;
 	case WM_COMMAND: {
+		DWORD menuStart = GetTickCount();
 		switch (LOWORD(wParam)) {
 		case IDM_GITHUB:
-			ShellExecute(NULL, _T("open"), _T("https://github.com/linsmod/proxied"), NULL, NULL, SW_SHOWNORMAL);
+			ShellExecute(NULL, _T("open"), _T("https://github.com/linsmod/proxied/releases"), NULL, NULL, SW_SHOWNORMAL);
 			break;
 		case IDM_EXIT:
 			Shell_NotifyIcon(NIM_DELETE, &pThis->nid_);
@@ -563,11 +600,24 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 			pThis->SyncSettings();
 			break;
 		case IDM_WSL_GIT_PROXY:
-			pThis->SetWslGitProxySetting(!pThis->wslGitProxyEnabled_);
-			CheckMenuItem(pThis->hPopupMenu_, IDM_WSL_GIT_PROXY,
-				pThis->wslGitProxyEnabled_ ? MF_CHECKED : MF_UNCHECKED);
-			// 立即同步设置
-			pThis->SyncSettings();
+			if (pThis->wslBusy_) {
+				break;
+			}
+			pThis->wslBusy_ = true;
+			{
+				bool enable = !pThis->wslGitProxyEnabled_;
+				WslToggleCtx* ctx = new WslToggleCtx{ pThis, enable };
+				HANDLE hThread = CreateThread(NULL, 0,
+					&Proxied::WslToggleThread, ctx, 0, NULL);
+				if (hThread) {
+					CloseHandle(hThread);
+				}
+				else {
+					pThis->wslBusy_ = false;
+					MessageBox(hWnd, _T("无法启动后台任务来修改 WSL 内 Git 的代理设置。"),
+						_T("Proxied"), MB_OK | MB_ICONWARNING);
+				}
+			}
 			break;
 		case IDM_CONFIG:
 			DialogBoxParam(GetModuleHandle(NULL),
@@ -575,6 +625,22 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 				hWnd, ConfigDialogProc,
 				reinterpret_cast<LPARAM>(pThis));
 			break;
+		}
+		pThis->LogMenuAction(Proxied::MenuName(LOWORD(wParam)), GetTickCount() - menuStart);
+		break;
+	}
+	case WM_WSL_RESULT: {
+		bool ok = (wParam != 0);
+		bool enable = (lParam != 0);
+		pThis->wslBusy_ = false;
+		if (ok) {
+			pThis->SetWslGitProxySetting(enable);
+			CheckMenuItem(pThis->hPopupMenu_, IDM_WSL_GIT_PROXY,
+				enable ? MF_CHECKED : MF_UNCHECKED);
+		}
+		else {
+			MessageBox(hWnd, _T("无法修改 WSL 内 Git 的代理设置，请检查 WSL 与 Git 是否已安装。"),
+				_T("Proxied"), MB_OK | MB_ICONWARNING);
 		}
 		break;
 	}
@@ -857,12 +923,12 @@ void Proxied::SetGradleProxySetting(bool enable) {
             _T("Software\\Proxied"),
             0, KEY_READ, &hKey) == ERROR_SUCCESS) {
     
-            DWORD value = 1; // 默认启用
-            DWORD size = sizeof(DWORD);
-            if (RegQueryValueEx(hKey, _T("WslGitProxyEnabled"), NULL, NULL,
-                reinterpret_cast<LPBYTE>(&value), &size) == ERROR_SUCCESS) {
-                wslGitProxyEnabled_ = (value != 0);
-            }
+        DWORD value = 0; // 默认不启用（首次使用时）
+        DWORD size = sizeof(DWORD);
+        if (RegQueryValueEx(hKey, _T("WslGitProxyEnabled"), NULL, NULL,
+            reinterpret_cast<LPBYTE>(&value), &size) == ERROR_SUCCESS) {
+            wslGitProxyEnabled_ = (value != 0);
+        }
     
             RegCloseKey(hKey);
         }
@@ -873,12 +939,68 @@ void Proxied::SetGradleProxySetting(bool enable) {
         if (RegCreateKeyEx(HKEY_CURRENT_USER,
             _T("Software\\Proxied"),
             0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
-    
+        
             DWORD value = enable ? 1 : 0;
             RegSetValueEx(hKey, _T("WslGitProxyEnabled"), 0, REG_DWORD,
                 reinterpret_cast<const BYTE*>(&value), sizeof(value));
-    
+        
             RegCloseKey(hKey);
             wslGitProxyEnabled_ = enable;
         }
+        }
+
+        void Proxied::CheckWslAvailability() {
+            wchar_t path[MAX_PATH];
+            wslAvailable_ = (SearchPathW(NULL, L"wsl.exe", NULL, MAX_PATH, path, NULL) != 0);
+        }
+
+        static std::string WStringToUtf8(const std::wstring& s) {
+            if (s.empty()) return std::string();
+            int sz = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), -1, NULL, 0, NULL, NULL);
+            std::string out(sz - 1, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, s.c_str(), -1, &out[0], sz, NULL, NULL);
+            return out;
+        }
+
+        void Proxied::LogMenuAction(const std::wstring& action, DWORD elapsedMs) {
+            wchar_t temp[MAX_PATH];
+            DWORD len = GetEnvironmentVariable(_T("TEMP"), temp, MAX_PATH);
+            std::string path = WStringToUtf8((len > 0 && len <= MAX_PATH)
+                ? std::wstring(temp) + L"\\proxied_menu.log"
+                : L"proxied_menu.log");
+
+            SYSTEMTIME st;
+            GetLocalTime(&st);
+            char ts[64];
+            sprintf_s(ts, sizeof(ts), "%04d-%02d-%02d %02d:%02d:%02d  ",
+                st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+            std::string line = std::string(ts) + WStringToUtf8(action) +
+                "  耗时 " + std::to_string(elapsedMs) + " ms\n";
+
+            bool exists = (GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES);
+            std::ofstream out(path, std::ios::binary | std::ios::app);
+            if (out) {
+                if (!exists) {
+                    const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
+                    out.write(reinterpret_cast<const char*>(bom), 3);
+                }
+                out.write(line.c_str(), static_cast<std::streamsize>(line.size()));
+                out.flush();
+            }
+        }
+
+        std::wstring Proxied::MenuName(int id) {
+            switch (id) {
+            case IDM_ENABLE: return L"启用代理";
+            case IDM_DISABLE: return L"禁用代理";
+            case IDM_AUTOSTART: return L"开机自启";
+            case IDM_GIT_PROXY: return L"Git代理";
+            case IDM_GRADLE_PROXY: return L"Gradle代理";
+            case IDM_WSL_GIT_PROXY: return L"WSL Git代理";
+            case IDM_GITHUB: return L"关于/开源地址";
+            case IDM_CONFIG: return L"配置代理";
+            case IDM_EXIT: return L"退出";
+            default: return L"未知(" + std::to_wstring(id) + L")";
+            }
         }
