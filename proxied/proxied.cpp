@@ -4,6 +4,10 @@
 #include "version.h"
 #include <fstream>
 #include <shellapi.h>
+#include <cmath>
+#include <ole2.h>
+#include <gdiplus.h>
+#pragma comment(lib, "gdiplus.lib")
 #include <tchar.h>
 #include <algorithm> // for std::replace
 #include <stdio.h>
@@ -44,7 +48,9 @@ Proxied::Proxied() :
   gradleProxyEnabled_(true),
   wslGitProxyEnabled_(false),
   wslAvailable_(false),
-  wslBusy_(false),
+  opBusy_(false),
+  proxyEnabled_(false),
+  busyFrame_(0),
 	hWnd_(NULL),
 	hPopupMenu_(NULL),
 	hEvent_(NULL) {
@@ -63,9 +69,26 @@ Proxied::~Proxied() {
 	}
 }
 
+struct OpCtx {
+    Proxied* self;
+    int opId;
+    DWORD startTick;
+};
+
+static const int BUSY_FRAMES = 12;
+static const int BUSY_INTERVAL = 80;
+
 void Proxied::Run() {
 	// 启用DPI感知
 	SetProcessDPIAware();
+
+	// 初始化 GDI+（用于绘制带 alpha 的旋转 busy 图标）
+	Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+	ULONG_PTR gdiplusToken = 0;
+	Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
+
+	// 每次启动重置日志（不追加历史记录）
+	ResetMenuLog();
 
 	// 初始化窗口类
 	WNDCLASS wc = { 0 };
@@ -93,8 +116,25 @@ void Proxied::Run() {
 
 	InitTrayIcon();
 
-	// 启动的时候先同步一次
-	SyncSettings();
+	// 启动的时候也走后台线程同步，期间显示 busy 旋转图标（尤其 WSL 冷启动较慢）
+	opBusy_ = true;
+	SetTimer(hWnd_, BUSY_TIMER_ID, BUSY_INTERVAL, NULL);
+	busyFrame_ = 0;
+	_tcscpy_s(nid_.szTip, ARRAYSIZE(nid_.szTip), _T("Proxied - 正在处理..."));
+	SetTrayIcon(MakeBusyIcon(0));
+	{
+		OpCtx* ctx = new OpCtx{ this, IDM_SYNC, GetTickCount() };
+		HANDLE hThread = CreateThread(NULL, 0, &Proxied::OpThread, ctx, 0, NULL);
+		if (hThread) {
+			CloseHandle(hThread);
+		}
+		else {
+			opBusy_ = false;
+			KillTimer(hWnd_, BUSY_TIMER_ID);
+			SetTrayIcon(LoadIcon(GetModuleHandle(NULL),
+				MAKEINTRESOURCE(proxyEnabled_ ? IDI_SMALL2 : IDI_SMALL)));
+		}
+	}
 
 	// 创建一个手动重置的事件对象
 	hEvent_ = CreateEvent(NULL, TRUE, FALSE, NULL);
@@ -120,6 +160,8 @@ void Proxied::Run() {
 	}
 
 	CloseHandle(hThread);
+
+	Gdiplus::GdiplusShutdown(gdiplusToken);
 }
 
 void Proxied::InitTrayIcon() {
@@ -150,6 +192,86 @@ void Proxied::InitTrayIcon() {
 		_T("Proxied - Loading..."));
 
 	Shell_NotifyIcon(NIM_ADD, &nid_);
+}
+
+void Proxied::SetTrayIcon(HICON hIcon) {
+    if (nid_.hIcon) {
+        DestroyIcon(nid_.hIcon);
+    }
+    nid_.hIcon = hIcon;
+    Shell_NotifyIcon(NIM_MODIFY, &nid_);
+}
+
+// 在基础图标上叠加旋转的系统等待光标（纯转圈，IDC_WAIT），生成 busy 图标
+HICON Proxied::MakeBusyIcon(int frame) {
+    int size = GetSystemMetrics(SM_CXSMICON);
+    if (size <= 0) size = 16;
+
+    HICON hBase = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(proxyEnabled_ ? IDI_SMALL2 : IDI_SMALL));
+    Gdiplus::Bitmap* bmpBase = Gdiplus::Bitmap::FromHICON(hBase);
+    DestroyIcon(hBase);
+    if (!bmpBase) {
+        return LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(proxyEnabled_ ? IDI_SMALL2 : IDI_SMALL));
+    }
+
+    // 系统等待光标（纯转圈不带箭头）：GDI+ 的 FromHICON 对光标无效，
+    // 改为画到 32bpp DIB 再用其像素构造 GDI+ Bitmap（保留 alpha）
+    Gdiplus::Bitmap* bmpWait = NULL;
+    HBITMAP hBmpWait = NULL;
+    HCURSOR hWait = LoadCursor(NULL, IDC_WAIT);
+    if (hWait) {
+        BITMAPINFO bmi = { 0 };
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = size;
+        bmi.bmiHeader.biHeight = -size;  // 自上而下
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        void* waitBits = NULL;
+        hBmpWait = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, &waitBits, NULL, 0);
+        if (hBmpWait) {
+            HDC hdcW = CreateCompatibleDC(NULL);
+            HGDIOBJ oldW = SelectObject(hdcW, hBmpWait);
+            memset(waitBits, 0, static_cast<size_t>(size) * size * 4);
+            DrawIconEx(hdcW, 0, 0, hWait, size, size, 0, NULL, DI_NORMAL);
+            SelectObject(hdcW, oldW);
+            DeleteDC(hdcW);
+            bmpWait = new Gdiplus::Bitmap(size, size, size * 4,
+                PixelFormat32bppARGB, static_cast<BYTE*>(waitBits));
+        }
+    }
+
+    Gdiplus::Bitmap bmpOut(size, size, PixelFormat32bppARGB);
+    {
+        Gdiplus::Graphics g(&bmpOut);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+        g.DrawImage(bmpBase, 0, 0, size, size);
+        if (bmpWait) {
+            double angle = frame * (360.0 / BUSY_FRAMES);
+            g.TranslateTransform(static_cast<Gdiplus::REAL>(size) / 2, static_cast<Gdiplus::REAL>(size) / 2);
+            g.RotateTransform(static_cast<Gdiplus::REAL>(angle));
+            g.TranslateTransform(-static_cast<Gdiplus::REAL>(size) / 2, -static_cast<Gdiplus::REAL>(size) / 2);
+            // 放大绘制（超出图标画布的部分会被裁掉），让转圈更醒目
+            int ringSize = size + size / 2;
+            int off = (ringSize - size) / 2;
+            g.DrawImage(bmpWait, static_cast<Gdiplus::REAL>(-off),
+                static_cast<Gdiplus::REAL>(-off),
+                static_cast<Gdiplus::REAL>(ringSize), static_cast<Gdiplus::REAL>(ringSize));
+        }
+    }
+
+    HICON hIcon = NULL;
+    Gdiplus::Status st = bmpOut.GetHICON(&hIcon);
+
+    delete bmpBase;
+    if (bmpWait) delete bmpWait;
+    if (hBmpWait) DeleteObject(hBmpWait);
+
+    if (st != Gdiplus::Ok || !hIcon) {
+        hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(proxyEnabled_ ? IDI_SMALL2 : IDI_SMALL));
+    }
+    return hIcon;
 }
 
 void Proxied::CheckAutoStart() {
@@ -295,6 +417,7 @@ bool Proxied::UpdateGradleConfig(bool enable) {
 	}
 
 	// 写入文件
+	bool result = false;
 	if (changed) {
 		// 确保目录存在
 		std::wstring dirPath = configPath.substr(0, configPath.find_last_of(L'\\'));
@@ -306,10 +429,11 @@ bool Proxied::UpdateGradleConfig(bool enable) {
 				outFile << line << std::endl;
 			}
 			outFile.close();
-			return true;
+			result = true;
 		}
+		LogProgramCall(L"Gradle", result);
 	}
-	return false;
+	return result;
 }
 
 void Proxied::UpdateUserEnvironmentVariable(const std::wstring& name, const std::wstring* value) {
@@ -344,6 +468,67 @@ std::wstring Proxied::EnsureProxyPrefix(const std::wstring& proxy) {
 	return proxy;
 }
 
+// 以隐藏方式运行命令，捕获 stdout/stderr 到 output，返回是否成功创建进程
+bool Proxied::RunHiddenCommand(const std::wstring& commandLine,
+                               std::string& output, DWORD& exitCode) {
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    sa.lpSecurityDescriptor = NULL;
+    HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreatePipe(&hRead, &hWrite, &sa, 0)) {
+        return false;
+    }
+    // 读取端不被子进程继承
+    SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFO si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    si.wShowWindow = SW_HIDE;
+    si.hStdOutput = hWrite;
+    si.hStdError = hWrite;
+    si.hStdInput = NULL;
+
+    if (!CreateProcess(NULL, (LPWSTR)commandLine.c_str(), NULL, NULL, TRUE,
+        CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        CloseHandle(hRead);
+        CloseHandle(hWrite);
+        return false;
+    }
+    CloseHandle(hWrite);  // 关闭父进程写入端，子进程退出后 ReadFile 才会返回
+
+    char buf[4096];
+    DWORD read = 0;
+    std::string all;
+    while (ReadFile(hRead, buf, sizeof(buf), &read, NULL) && read > 0) {
+        all.append(buf, read);
+    }
+    CloseHandle(hRead);
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    // 管道输出编码归一化：WSL/git 有时以 UTF-16LE 写入管道，转成 UTF-8 以便日志正确显示
+    if (all.size() >= 2 && (all.size() % 2 == 0) && all[1] == '\0') {
+        const wchar_t* w = reinterpret_cast<const wchar_t*>(all.data());
+        int wlen = static_cast<int>(all.size() / 2);
+        int sz = WideCharToMultiByte(CP_UTF8, 0, w, wlen, NULL, 0, NULL, NULL);
+        if (sz > 0) {
+            std::string u8(sz, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, w, wlen, &u8[0], sz, NULL, NULL);
+            output = std::move(u8);
+            return true;
+        }
+    }
+    output = std::move(all);
+    return true;
+}
+
 bool Proxied::UpdateGitConfig(bool enable) {
     // 构建 git 命令
     std::wstring command;
@@ -352,50 +537,24 @@ bool Proxied::UpdateGitConfig(bool enable) {
         // 组合命令，使用 & 连接多个命令
         command = L"git config --global http.proxy \"" + proxyWithPrefix + L"\" & git config --global https.proxy \"" + proxyWithPrefix + L"\"";
     } else {
-        // 组合命令，使用 & 连接多个命令
-        command = L"git config --global --unset http.proxy & git config --global --unset https.proxy";
+        // 组合命令，使用 & 连接多个命令；不存在的键也视为成功（exit 0）
+        command = L"git config --global --unset http.proxy & git config --global --unset https.proxy & exit 0";
     }
     
     // 准备执行命令
-    STARTUPINFO si;
-    PROCESS_INFORMATION pi;
-    
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE; // 隐藏窗口
-    
-    ZeroMemory(&pi, sizeof(pi));
-    
     // 使用 cmd.exe 执行命令
     std::wstring fullCommand = L"cmd.exe /c " + command;
-    
-    // 创建进程
-    if (!CreateProcess(NULL, 
-        (LPWSTR)fullCommand.c_str(), 
-        NULL, 
-        NULL, 
-        FALSE, 
-        CREATE_NO_WINDOW, // 不创建窗口
-        NULL, 
-        NULL, 
-        &si, 
-        &pi)) {
+
+    DWORD exitCode = 0;
+    std::string output;
+    if (!RunHiddenCommand(fullCommand, output, exitCode)) {
+        LogProgramCall(L"Git", false, command, std::string());
         return false;
     }
-    
-    // 等待进程完成
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    
-    // 获取退出码
-    DWORD exitCode;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-    
-    // 关闭句柄
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    
-    return (exitCode == 0);
+
+    bool ok = (exitCode == 0);
+    LogProgramCall(L"Git", ok, command, output);
+    return ok;
 }
 
 bool Proxied::UpdateWslGitConfig(bool enable) {
@@ -412,44 +571,24 @@ bool Proxied::UpdateWslGitConfig(bool enable) {
     }
 
     // 直接启动 wsl.exe（不经过 cmd，避免引号转义问题）
-    STARTUPINFO si;
-    PROCESS_INFORMATION pi;
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    ZeroMemory(&pi, sizeof(pi));
-
-    if (!CreateProcess(NULL,
-        (LPWSTR)command.c_str(),
-        NULL,
-        NULL,
-        FALSE,
-        CREATE_NO_WINDOW,
-        NULL,
-        NULL,
-        &si,
-        &pi)) {
+    DWORD exitCode = 0;
+    std::string output;
+    if (!RunHiddenCommand(command, output, exitCode)) {
+        LogProgramCall(L"WSL Git", false, command, std::string());
         return false;
     }
 
-    // 等待进程完成
-    WaitForSingleObject(pi.hProcess, INFINITE);
-
-    // 获取退出码
-    DWORD exitCode;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-
-    // 关闭句柄
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
-    return (exitCode == 0);
+    bool ok = (exitCode == 0);
+    LogProgramCall(L"WSL Git", ok, command, output);
+    return ok;
 }
 
-void Proxied::SyncSettings() {
+void Proxied::ApplyChanges() {
+    // 序列化：避免与后台操作线程或注册表监听线程并发执行
+    std::lock_guard<std::mutex> lock(applyMutex_);
     // 初始读取代理设置
     bool proxyEnabled = GetProxySettings();
+    proxyEnabled_ = proxyEnabled;
 
     if (proxyEnabled) {
         std::wstring proxyWithPrefix = EnsureProxyPrefix(proxyServer_);
@@ -481,16 +620,13 @@ void Proxied::SyncSettings() {
     //PostMessage(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)_T("Environment"));
 	 SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)_T("Environment"), SMTO_ABORTIFHUNG, 5000, NULL);
 
-	// 更新托盘提示
-	// 如果之前有图标资源，先释放
-	if (nid_.hIcon) {
-		DestroyIcon(nid_.hIcon);
-	}
-	// 加载新图标
-	nid_.hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(proxyEnabled ? IDI_SMALL2 : IDI_SMALL));
+	// 更新托盘提示与图标（busy 时由旋转图标接管，跳过以免闪烁）
 	_tcscpy_s(nid_.szTip, ARRAYSIZE(nid_.szTip),
 		proxyEnabled ? _T("Proxied - 代理已启用") : _T("Proxied - 代理已禁用"));
-	Shell_NotifyIcon(NIM_MODIFY, &nid_);
+	if (!opBusy_) {
+		HICON hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(proxyEnabled ? IDI_SMALL2 : IDI_SMALL));
+		SetTrayIcon(hIcon);
+	}
 
 	// 更新菜单状态
 	CheckMenuItem(hPopupMenu_, IDM_ENABLE, MF_BYCOMMAND | (proxyEnabled ? MF_CHECKED : MF_UNCHECKED));
@@ -511,8 +647,10 @@ void Proxied::HandleRegistryChanges(HANDLE hEvent) {
 	while (true) {
 		// 等待事件被触发
 		if (WaitForSingleObject(hEvent, INFINITE) == WAIT_OBJECT_0) {
-
-			SyncSettings();
+			// 自己发起的修改（后台操作线程已处理），跳过避免重复执行
+			if (!opBusy_) {
+				ApplyChanges();
+			}
 			isUpdating = false;
 			// 重置事件以继续监听
 			if (RegNotifyChangeKeyValue(hKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET, hEvent, TRUE) != ERROR_SUCCESS) {
@@ -524,17 +662,50 @@ void Proxied::HandleRegistryChanges(HANDLE hEvent) {
 	RegCloseKey(hKey);
 }
 
-struct WslToggleCtx {
-    Proxied* self;
-    bool enable;
-};
+// 统一的后台操作线程：同一时间只允许一个操作在进行中（由 opBusy_ 守护）
+DWORD WINAPI Proxied::OpThread(LPVOID lpParam) {
+    OpCtx* ctx = reinterpret_cast<OpCtx*>(lpParam);
+    Proxied* self = ctx->self;
+    bool ok = true;
 
-DWORD WINAPI Proxied::WslToggleThread(LPVOID lpParam) {
-    WslToggleCtx* ctx = reinterpret_cast<WslToggleCtx*>(lpParam);
-    // 唯一的 wsl 命令：直接尝试修改 WSL 内 Git 代理
-    bool ok = ctx->self->UpdateWslGitConfig(ctx->enable);
-    PostMessage(ctx->self->hWnd_, WM_WSL_RESULT,
-        ok ? 1 : 0, ctx->enable ? 1 : 0);
+    switch (ctx->opId) {
+    case IDM_ENABLE:
+    case IDM_DISABLE: {
+        bool enable = (ctx->opId == IDM_ENABLE);
+        HKEY hKey;
+        if (RegOpenKeyEx(HKEY_CURRENT_USER, REG_PATH, 0, KEY_WRITE, &hKey) == ERROR_SUCCESS) {
+            DWORD value = enable ? 1 : 0;
+            RegSetValueEx(hKey, _T("ProxyEnable"), 0, REG_DWORD,
+                reinterpret_cast<const BYTE*>(&value), sizeof(value));
+            RegCloseKey(hKey);
+        }
+        self->ApplyChanges();
+        break;
+    }
+    case IDM_SYNC:
+        // 启动时的初始同步（无状态变更），同样在后台线程执行以显示 busy 图标
+        self->ApplyChanges();
+        break;
+    case IDM_GIT_PROXY:
+        self->SetGitProxySetting(!self->gitProxyEnabled_);
+        self->ApplyChanges();
+        break;
+    case IDM_GRADLE_PROXY:
+        self->SetGradleProxySetting(!self->gradleProxyEnabled_);
+        self->ApplyChanges();
+        break;
+    case IDM_WSL_GIT_PROXY: {
+        bool enable = !self->wslGitProxyEnabled_;
+        ok = self->UpdateWslGitConfig(enable);
+        if (ok) {
+            // 在 opBusy_ 仍为 true 时落盘，避免注册表监听线程重复触发 ApplyChanges
+            self->SetWslGitProxySetting(enable);
+        }
+        break;
+    }
+    }
+
+    PostMessage(self->hWnd_, WM_PROXY_OP_DONE, ctx->opId, ok ? 1 : 0);
     delete ctx;
     return 0;
 }
@@ -553,68 +724,58 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 		}
 		break;
 	}
-					HKEY hKey;
 	case WM_COMMAND: {
-		DWORD menuStart = GetTickCount();
 		switch (LOWORD(wParam)) {
 		case IDM_GITHUB:
-			ShellExecute(NULL, _T("open"), _T("https://github.com/linsmod/proxied/releases"), NULL, NULL, SW_SHOWNORMAL);
+			if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
+				// 按住 SHIFT：打开日志文件
+				wchar_t temp[MAX_PATH];
+				GetEnvironmentVariable(_T("TEMP"), temp, MAX_PATH);
+				std::wstring logPath = std::wstring(temp) + L"\\proxied_menu.log";
+				ShellExecute(NULL, _T("open"), _T("notepad.exe"),
+					logPath.c_str(), NULL, SW_SHOWNORMAL);
+			}
+			else {
+				ShellExecute(NULL, _T("open"), _T("https://github.com/linsmod/proxied/releases"), NULL, NULL, SW_SHOWNORMAL);
+			}
 			break;
 		case IDM_EXIT:
 			Shell_NotifyIcon(NIM_DELETE, &pThis->nid_);
 			PostQuitMessage(0);
-			break;
-		case IDM_ENABLE:
-			if (RegOpenKeyEx(HKEY_CURRENT_USER, REG_PATH, 0, KEY_WRITE, &hKey) == ERROR_SUCCESS) {
-				DWORD value = 1;
-				RegSetValueEx(hKey, _T("ProxyEnable"), 0, REG_DWORD,
-					reinterpret_cast<const BYTE*>(&value), sizeof(value));
-				RegCloseKey(hKey);
-			}
-			break;
-		case IDM_DISABLE:
-			if (RegOpenKeyEx(HKEY_CURRENT_USER, REG_PATH, 0, KEY_WRITE, &hKey) == ERROR_SUCCESS) {
-				DWORD value = 0;
-				RegSetValueEx(hKey, _T("ProxyEnable"), 0, REG_DWORD,
-					reinterpret_cast<const BYTE*>(&value), sizeof(value));
-				RegCloseKey(hKey);
-			}
 			break;
 		case IDM_AUTOSTART:
 			pThis->SetAutoStart(!pThis->autoStart_);
 			CheckMenuItem(pThis->hPopupMenu_, IDM_AUTOSTART,
 				pThis->autoStart_ ? MF_CHECKED : MF_UNCHECKED);
 			break;
+		case IDM_ENABLE:
+		case IDM_DISABLE:
 		case IDM_GIT_PROXY:
-			pThis->SetGitProxySetting(!pThis->gitProxyEnabled_);
-			CheckMenuItem(pThis->hPopupMenu_, IDM_GIT_PROXY,
-				pThis->gitProxyEnabled_ ? MF_CHECKED : MF_UNCHECKED);
-			// 立即同步设置
-			pThis->SyncSettings();
-			break;
 		case IDM_GRADLE_PROXY:
-			pThis->SetGradleProxySetting(!pThis->gradleProxyEnabled_);
-			CheckMenuItem(pThis->hPopupMenu_, IDM_GRADLE_PROXY,
-				pThis->gradleProxyEnabled_ ? MF_CHECKED : MF_UNCHECKED);
-			// 立即同步设置
-			pThis->SyncSettings();
-			break;
 		case IDM_WSL_GIT_PROXY:
-			if (pThis->wslBusy_) {
+			// 统一交给后台线程执行，保证同一时间只有一个操作在进行
+			if (pThis->opBusy_) {
 				break;
 			}
-			pThis->wslBusy_ = true;
+			pThis->opBusy_ = true;
+			// 启动旋转图标计时器，立即显示第一帧
+			SetTimer(pThis->hWnd_, BUSY_TIMER_ID, BUSY_INTERVAL, NULL);
+			pThis->busyFrame_ = 0;
+			_tcscpy_s(pThis->nid_.szTip, ARRAYSIZE(pThis->nid_.szTip), _T("Proxied - 正在处理..."));
+			pThis->SetTrayIcon(pThis->MakeBusyIcon(0));
 			{
-				bool enable = !pThis->wslGitProxyEnabled_;
-				WslToggleCtx* ctx = new WslToggleCtx{ pThis, enable };
+				OpCtx* ctx = new OpCtx{ pThis, LOWORD(wParam), GetTickCount() };
 				HANDLE hThread = CreateThread(NULL, 0,
-					&Proxied::WslToggleThread, ctx, 0, NULL);
+					&Proxied::OpThread, ctx, 0, NULL);
 				if (hThread) {
 					CloseHandle(hThread);
 				}
 				else {
-					pThis->wslBusy_ = false;
-					MessageBox(hWnd, _T("无法启动后台任务来修改 WSL 内 Git 的代理设置。"),
+					pThis->opBusy_ = false;
+					KillTimer(pThis->hWnd_, BUSY_TIMER_ID);
+					pThis->SetTrayIcon(LoadIcon(GetModuleHandle(NULL),
+						MAKEINTRESOURCE(pThis->proxyEnabled_ ? IDI_SMALL2 : IDI_SMALL)));
+					MessageBox(hWnd, _T("无法启动后台任务。"),
 						_T("Proxied"), MB_OK | MB_ICONWARNING);
 				}
 			}
@@ -626,21 +787,32 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 				reinterpret_cast<LPARAM>(pThis));
 			break;
 		}
-		pThis->LogMenuAction(Proxied::MenuName(LOWORD(wParam)), GetTickCount() - menuStart);
 		break;
 	}
-	case WM_WSL_RESULT: {
-		bool ok = (wParam != 0);
-		bool enable = (lParam != 0);
-		pThis->wslBusy_ = false;
-		if (ok) {
-			pThis->SetWslGitProxySetting(enable);
-			CheckMenuItem(pThis->hPopupMenu_, IDM_WSL_GIT_PROXY,
-				enable ? MF_CHECKED : MF_UNCHECKED);
+	case WM_PROXY_OP_DONE: {
+		int opId = static_cast<int>(wParam);
+		bool ok = (lParam != 0);
+		pThis->opBusy_ = false;
+		// 停止旋转并恢复普通图标
+		KillTimer(hWnd, BUSY_TIMER_ID);
+		pThis->SetTrayIcon(LoadIcon(GetModuleHandle(NULL),
+			MAKEINTRESOURCE(pThis->proxyEnabled_ ? IDI_SMALL2 : IDI_SMALL)));
+		if (opId == IDM_WSL_GIT_PROXY) {
+			if (ok) {
+				CheckMenuItem(pThis->hPopupMenu_, IDM_WSL_GIT_PROXY,
+					pThis->wslGitProxyEnabled_ ? MF_CHECKED : MF_UNCHECKED);
+			}
+			else {
+				MessageBox(hWnd, _T("无法修改 WSL 内 Git 的代理设置，请检查 WSL 与 Git 是否已安装。"),
+					_T("Proxied"), MB_OK | MB_ICONWARNING);
+			}
 		}
-		else {
-			MessageBox(hWnd, _T("无法修改 WSL 内 Git 的代理设置，请检查 WSL 与 Git 是否已安装。"),
-				_T("Proxied"), MB_OK | MB_ICONWARNING);
+		break;
+	}
+	case WM_TIMER: {
+		if (wParam == BUSY_TIMER_ID) {
+			pThis->busyFrame_ = (pThis->busyFrame_ + 1) % BUSY_FRAMES;
+			pThis->SetTrayIcon(pThis->MakeBusyIcon(pThis->busyFrame_));
 		}
 		break;
 	}
@@ -962,7 +1134,36 @@ void Proxied::SetGradleProxySetting(bool enable) {
             return out;
         }
 
-        void Proxied::LogMenuAction(const std::wstring& action, DWORD elapsedMs) {
+        void Proxied::ResetMenuLog() {
+            std::lock_guard<std::mutex> lock(logMutex_);
+            wchar_t temp[MAX_PATH];
+            DWORD len = GetEnvironmentVariable(_T("TEMP"), temp, MAX_PATH);
+            std::string path = WStringToUtf8((len > 0 && len <= MAX_PATH)
+                ? std::wstring(temp) + L"\\proxied_menu.log"
+                : L"proxied_menu.log");
+
+            // 每次启动清空旧日志（不追加历史），写 UTF-8 BOM + 启动头
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            if (out) {
+                const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
+                out.write(reinterpret_cast<const char*>(bom), 3);
+
+                SYSTEMTIME st;
+                GetLocalTime(&st);
+                char ts[64];
+                sprintf_s(ts, sizeof(ts), "%04d-%02d-%02d %02d:%02d:%02d",
+                    st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+                std::string header = std::string(ts) +
+                    "  === Proxied 启动 (版本 " + WStringToUtf8(PROXIED_VERSION) + ") ===\n";
+                out.write(header.c_str(), static_cast<std::streamsize>(header.size()));
+                out.flush();
+            }
+        }
+
+        void Proxied::LogProgramCall(const std::wstring& name, bool ok,
+                const std::wstring& input, const std::string& output) {
+            std::lock_guard<std::mutex> lock(logMutex_);
             wchar_t temp[MAX_PATH];
             DWORD len = GetEnvironmentVariable(_T("TEMP"), temp, MAX_PATH);
             std::string path = WStringToUtf8((len > 0 && len <= MAX_PATH)
@@ -975,32 +1176,23 @@ void Proxied::SetGradleProxySetting(bool enable) {
             sprintf_s(ts, sizeof(ts), "%04d-%02d-%02d %02d:%02d:%02d  ",
                 st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
 
-            std::string line = std::string(ts) + WStringToUtf8(action) +
-                "  耗时 " + std::to_string(elapsedMs) + " ms\n";
+            std::string line = std::string(ts) + "[程序] " + WStringToUtf8(name) +
+                (ok ? " 执行成功\n" : " 执行失败\n");
+            if (!input.empty()) {
+                line += "  命令: " + WStringToUtf8(input) + "\n";
+            }
+            if (!output.empty()) {
+                line += "  输出:\n";
+                line += output;
+                if (output.back() != '\n') {
+                    line += "\n";
+                }
+            }
 
-            bool exists = (GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES);
             std::ofstream out(path, std::ios::binary | std::ios::app);
             if (out) {
-                if (!exists) {
-                    const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
-                    out.write(reinterpret_cast<const char*>(bom), 3);
-                }
                 out.write(line.c_str(), static_cast<std::streamsize>(line.size()));
                 out.flush();
             }
         }
 
-        std::wstring Proxied::MenuName(int id) {
-            switch (id) {
-            case IDM_ENABLE: return L"启用代理";
-            case IDM_DISABLE: return L"禁用代理";
-            case IDM_AUTOSTART: return L"开机自启";
-            case IDM_GIT_PROXY: return L"Git代理";
-            case IDM_GRADLE_PROXY: return L"Gradle代理";
-            case IDM_WSL_GIT_PROXY: return L"WSL Git代理";
-            case IDM_GITHUB: return L"关于/开源地址";
-            case IDM_CONFIG: return L"配置代理";
-            case IDM_EXIT: return L"退出";
-            default: return L"未知(" + std::to_wstring(id) + L")";
-            }
-        }
