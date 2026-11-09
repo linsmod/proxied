@@ -244,7 +244,7 @@ Proxied::Proxied() :
 }
 
 void Proxied::DetectLanguage() {
-	// 字符串/对话框资源以多语言形式编译进主模块（中性英文兜底 + 英文 + 简体中文），
+	// 字符串资源以“中性英文 + 简体中文”两份独立的 STRINGTABLE 直接编译进主模块，
 	// LoadString 与 DialogBox 会按系统 UI 语言自动选择最匹配的版本，无需手动切换资源实例。
 	hResourceInstance_ = GetModuleHandle(NULL);
 }
