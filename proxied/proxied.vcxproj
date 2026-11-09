@@ -154,6 +154,7 @@
   <ItemGroup>
     <ResourceCompile Include="proxied.rc" />
     <ResourceCompile Include="StringResources.rc" />
+    <ResourceCompile Include="ProxySettingsDialog.rc" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="proxied.ico" />

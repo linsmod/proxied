@@ -36,12 +36,17 @@ private:
     static const int IDM_GRADLE_PROXY = 111;
     static const int IDM_WSL_GIT_PROXY = 112;
     static const int IDM_SYNC = 113;
+    static const int IDM_SETTINGS = 114;
 
     // 成员变量
     NOTIFYICONDATA nid_;
     HMENU hPopupMenu_;
     bool isUpdating;
     std::wstring proxyServer_;
+    std::wstring httpProxy_;
+    std::wstring socks5Proxy_;
+    std::wstring pendingHttpProxy_;
+    std::wstring pendingSocks5Proxy_;
     std::wstring nonProxyHosts_;
     std::wstring gradleConfigPath_;
     bool autoStart_;
@@ -62,6 +67,7 @@ private:
     bool UpdateGitConfig(bool enable);
     bool UpdateWslGitConfig(bool enable);
     HWND hWnd_;
+    HWND settingsDialog_;
     HANDLE hEvent_;
 
     // 私有方法
@@ -85,6 +91,9 @@ private:
         const std::wstring& input = L"", const std::string& output = std::string());
     bool RunHiddenCommand(const std::wstring& commandLine, std::string& output, DWORD& exitCode);
     static DWORD WINAPI OpThread(LPVOID lpParam);
+    bool ShowProxySettings(std::wstring& httpProxy, std::wstring& socks5Proxy);
+    static INT_PTR CALLBACK ProxySettingsDlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
+    void UpdateSettingsDialogIcon();
     void DetectLanguage();
     std::wstring LoadLocalizedString(UINT id);
     std::wstring LoadStringByLang(UINT id, LANGID lang);

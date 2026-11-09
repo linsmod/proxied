@@ -9,13 +9,16 @@
 ## 功能
 
 - **系统级代理开关**：启用/禁用 Windows 系统代理，实时同步 Windows 设置页（通过监听注册表实现）
+- **分别配置 HTTP 与 SOCKS5**：托盘菜单打开“代理设置”，例如 `http://192.168.0.4:8502` 和 `socks5://192.168.0.4:8501`，可只填写其中一个
 - **同步 Git 代理**：启用/禁用时同步写入 `git config --global http.proxy/https.proxy`
 - **同步 Gradle 代理**：启用/禁用时同步写入 `~/.gradle/gradle.properties`
 - **同步 WSL 内 Git 代理**：启用/禁用时通过 `wsl.exe` 同步写入 WSL 内的 git 全局代理配置
-- **同步 `http_proxy` 环境变量**：一并写入 `HKCU\Environment`，照顾那些读环境变量的程序
+- **同步代理环境变量**：一并写入 `HKCU\Environment` 的 `http_proxy`、`https_proxy`、`all_proxy`
 - **开机自启**：可选随 Windows 启动
 
-以上三项"同步 Git / Gradle / WSL Git"都是独立的开关（托盘菜单里勾选），默认全部开启，按需关掉某个就行。
+以上三项"同步 Git / Gradle / WSL Git"都是独立的开关（托盘菜单里勾选），Git 和 Gradle 默认开启，WSL Git 默认关闭，按需调整即可。
+
+Git 没有独立的通用 SOCKS5 配置项，因此同时配置两种代理时，Git 使用 HTTP 代理；只配置 SOCKS5 时，Git 使用 SOCKS5。Gradle 会分别写入 HTTP(S) 和 SOCKS 的 JVM 属性。
 
 ## 原理
 
@@ -30,9 +33,9 @@ Windows 自家程序大多乖乖用系统级代理设置，但有些开发工具
 | --- | --- |
 | Windows 系统代理 | `HKCU\...\Internet Settings`（ProxyEnable / ProxyServer） |
 | Git（Windows） | `git config --global http.proxy / https.proxy` |
-| Gradle | `~/.gradle/gradle.properties`（systemProp.http.* / systemProp.https.*） |
+| Gradle | `~/.gradle/gradle.properties`（systemProp.http.* / systemProp.https.* / systemProp.socksProxy*） |
 | WSL 内 Git | WSL 内 `git config --global http.proxy / https.proxy` |
-| 环境变量 | `HKCU\Environment` 的 `http_proxy` / `https_proxy` |
+| 环境变量 | `HKCU\Environment` 的 `http_proxy` / `https_proxy` / `all_proxy` |
 
 它同时也写入 `http_proxy` 环境变量——我开始以为 Gradle 会读取它，然而并没有。或许某个其他软件会使用这个变量，就像在 Ubuntu 上面一样？我不知道，但仍然保留了这部分代码和功能。
 

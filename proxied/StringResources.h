@@ -16,5 +16,13 @@
 #define IDS_CANNOT_START_TASK       1013
 #define IDS_WSL_GIT_ERROR           1014
 #define IDS_APP_TITLE               1015
+#define IDS_PROXY_SETTINGS          1016
+#define IDS_HTTP_PROXY              1017
+#define IDS_SOCKS5_PROXY            1018
+#define IDS_CURRENT_VERSION         1019
+#define IDS_SAVE                    1020
+#define IDS_CANCEL                  1021
+#define IDS_INVALID_PROXY           1022
+#define IDS_PROXY_SAVE_ERROR        1023
 #define IDS_SECTION                 1024
 

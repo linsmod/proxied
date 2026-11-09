@@ -18,5 +18,13 @@ BEGIN
     IDS_CANNOT_START_TASK     "Cannot start background task."
     IDS_WSL_GIT_ERROR         "Cannot modify WSL Git proxy settings. Please check if WSL and Git are installed."
     IDS_APP_TITLE             "Proxied"
+    IDS_PROXY_SETTINGS        "Proxy settings"
+    IDS_HTTP_PROXY            "HTTP / HTTPS proxy:"
+    IDS_SOCKS5_PROXY          "SOCKS5 proxy:"
+    IDS_CURRENT_VERSION       "Current version: "
+    IDS_SAVE                  "Save"
+    IDS_CANCEL                "Cancel"
+    IDS_INVALID_PROXY         "Enter a valid proxy address with a host and port (1-65535), and configure at least one proxy."
+    IDS_PROXY_SAVE_ERROR      "Cannot save proxy settings to the Windows registry."
 
 END
