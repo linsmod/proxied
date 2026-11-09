@@ -641,6 +641,7 @@ INT_PTR CALLBACK Proxied::ProxySettingsDlgProc(HWND hDlg, UINT message, WPARAM w
 		SetWindowText(hDlg, self->LoadLocalizedString(IDS_PROXY_SETTINGS).c_str());
 		SetDlgItemText(hDlg, IDC_HTTP_PROXY_LABEL, self->LoadLocalizedString(IDS_HTTP_PROXY).c_str());
 		SetDlgItemText(hDlg, IDC_SOCKS5_PROXY_LABEL, self->LoadLocalizedString(IDS_SOCKS5_PROXY).c_str());
+		SetDlgItemText(hDlg, IDC_PROXY_HINT, self->LoadLocalizedString(IDS_PROXY_HINT).c_str());
 		SetDlgItemText(hDlg, IDOK, self->LoadLocalizedString(IDS_SAVE).c_str());
 		SetDlgItemText(hDlg, IDCANCEL, self->LoadLocalizedString(IDS_CANCEL).c_str());
 		SetDlgItemText(hDlg, IDC_HTTP_PROXY_EDIT, context->httpProxy->c_str());

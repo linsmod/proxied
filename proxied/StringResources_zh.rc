@@ -26,4 +26,5 @@ BEGIN
     IDS_CANCEL                "取消"
     IDS_INVALID_PROXY         "请输入包含主机和端口（1-65535）的有效代理地址，并至少配置一种代理。"
     IDS_PROXY_SAVE_ERROR      "无法将代理设置保存到 Windows 注册表。"
+    IDS_PROXY_HINT            "提示：Windows 系统代理的 SOCKS 项仅支持 SOCKS4（不支持 SOCKS5、认证与 IPv6）。\n仅支持 SOCKS5 的代理可用于 Git、Gradle 和环境变量，但 Windows 程序无法通过系统代理上网。"
 END

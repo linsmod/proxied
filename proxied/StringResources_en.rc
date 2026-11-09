@@ -26,5 +26,6 @@ BEGIN
     IDS_CANCEL                "Cancel"
     IDS_INVALID_PROXY         "Enter a valid proxy address with a host and port (1-65535), and configure at least one proxy."
     IDS_PROXY_SAVE_ERROR      "Cannot save proxy settings to the Windows registry."
+    IDS_PROXY_HINT            "Note: the Windows system proxy only supports SOCKS4 for the SOCKS entry\n(no SOCKS5, authentication or IPv6). A SOCKS5-only proxy works for\nGit, Gradle and environment variables, but not as the system proxy."
 
 END

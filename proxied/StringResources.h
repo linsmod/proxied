@@ -25,4 +25,5 @@
 #define IDS_INVALID_PROXY           1022
 #define IDS_PROXY_SAVE_ERROR        1023
 #define IDS_SECTION                 1024
+#define IDS_PROXY_HINT              1025
 
