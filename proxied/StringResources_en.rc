@@ -19,7 +19,7 @@ BEGIN
     IDS_WSL_GIT_ERROR         "Cannot modify WSL Git proxy settings. Please check if WSL and Git are installed."
     IDS_APP_TITLE             "Proxied"
     IDS_PROXY_SETTINGS        "Proxy settings"
-    IDS_HTTP_PROXY            "HTTP / HTTPS proxy:"
+    IDS_HTTP_PROXY            "HTTP proxy address:"
     IDS_SOCKS5_PROXY          "SOCKS5 proxy:"
     IDS_CURRENT_VERSION       "Current version: "
     IDS_SAVE                  "Save"

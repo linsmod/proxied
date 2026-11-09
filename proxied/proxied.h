@@ -13,8 +13,6 @@ public:
 
     static DWORD WINAPI ThreadProc(LPVOID lpParam);
 
-    std::wstring EnsureProxyPrefix(const std::wstring& proxy);
-
     void ApplyChanges();
 
     void Run();
@@ -26,6 +24,7 @@ private:
     // 常量定义
     static const UINT WM_TRAYICON = WM_USER + 1;
     static const UINT WM_PROXY_OP_DONE = WM_USER + 3;
+    static const UINT WM_SETTINGS_PROXY_STATE = WM_USER + 4;
     static const UINT_PTR BUSY_TIMER_ID = 1;
     static const int IDM_GITHUB = 109;
     static const int IDM_EXIT = 100;

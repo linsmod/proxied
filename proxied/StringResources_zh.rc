@@ -19,7 +19,7 @@ BEGIN
     IDS_WSL_GIT_ERROR         "无法修改 WSL 内 Git 的代理设置，请检查 WSL 与 Git 是否已安装。"
     IDS_APP_TITLE             "代理使随控制器（Proxied）"
     IDS_PROXY_SETTINGS        "代理设置"
-    IDS_HTTP_PROXY            "HTTP / HTTPS 代理："
+    IDS_HTTP_PROXY            "HTTP 代理地址："
     IDS_SOCKS5_PROXY          "SOCKS5 代理："
     IDS_CURRENT_VERSION       "当前版本："
     IDS_SAVE                  "保存"

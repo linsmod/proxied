@@ -82,6 +82,18 @@ bool ParseProxyAddress(const std::wstring& input, bool socks5, ParsedProxyAddres
 		port = value.substr(colon + 1);
 	}
 
+	// 主机名只接受 DNS/IPv4 字符；IPv6 只接受十六进制、冒号和点，避免命令行元字符。
+	bool ipv6 = value[0] == L'[';
+	bool validHost = std::all_of(host.begin(), host.end(), [ipv6](wchar_t c) {
+		if (ipv6) {
+			return (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') ||
+				(c >= L'A' && c <= L'F') || c == L':' || c == L'.';
+		}
+		return (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'z') ||
+			(c >= L'A' && c <= L'Z') || c == L'.' || c == L'_' || c == L'-';
+	});
+	if (!validHost) return false;
+
 	if (port.empty() || !std::all_of(port.begin(), port.end(),
 		[](wchar_t c) { return std::iswdigit(c) != 0; })) {
 		return false;
@@ -108,6 +120,32 @@ std::wstring BuildWindowsProxyServer(const std::wstring& httpProxy, const std::w
 		value += L"socks=" + socks.hostPort;
 	}
 	return value;
+}
+
+std::wstring BuildNoProxy(const std::wstring& value) {
+	std::wstring result;
+	auto append = [&result](const std::wstring& item) {
+		if (item.empty()) return;
+		if (!result.empty()) result += L',';
+		result += item;
+	};
+	size_t start = 0;
+	while (start <= value.size()) {
+		size_t end = value.find(L';', start);
+		std::wstring item = TrimCopy(value.substr(start,
+			end == std::wstring::npos ? std::wstring::npos : end - start));
+		if (LowerCopy(item) == L"<local>") {
+			append(L"localhost");
+			append(L"127.0.0.1");
+			append(L"::1");
+		}
+		else {
+			append(item);
+		}
+		if (end == std::wstring::npos) break;
+		start = end + 1;
+	}
+	return result;
 }
 
 void ParseWindowsProxyServer(const std::wstring& value,
@@ -578,9 +616,12 @@ bool Proxied::ShowProxySettings(std::wstring& httpProxy, std::wstring& socks5Pro
 		SetActiveWindow(settingsDialog_);
 		return false;
 	}
-	GetProxySettings();
-	httpProxy = httpProxy_;
-	socks5Proxy = socks5Proxy_;
+	{
+		std::lock_guard<std::mutex> lock(applyMutex_);
+		GetProxySettings();
+		httpProxy = httpProxy_;
+		socks5Proxy = socks5Proxy_;
+	}
 	ProxySettingsDialogContext context{ this, &httpProxy, &socks5Proxy };
 	INT_PTR result = DialogBoxParamW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDD_PROXY_SETTINGS),
 		hWnd_, &Proxied::ProxySettingsDlgProc, reinterpret_cast<LPARAM>(&context));
@@ -706,12 +747,12 @@ bool Proxied::UpdateGradleConfig(bool enable) {
 		lines.clear();
 	}
 
-	// 分别写入 HTTP(S) 与 SOCKS 的 JVM 网络属性。
+	// 与 Git 保持一致：优先 HTTP，仅未配置 HTTP 时使用 SOCKS，避免双重代理。
 	if (enable) {
 		ParsedProxyAddress http;
 		ParsedProxyAddress socks;
 		bool hasHttp = ParseProxyAddress(httpProxy_, false, http);
-		bool hasSocks = ParseProxyAddress(socks5Proxy_, true, socks);
+		bool hasSocks = !hasHttp && ParseProxyAddress(socks5Proxy_, true, socks);
 		if (hasHttp) {
 			lines.push_back(L"systemProp.http.proxyHost=" + http.host);
 			lines.push_back(L"systemProp.http.proxyPort=" + http.port);
@@ -776,13 +817,6 @@ DWORD WINAPI Proxied::ThreadProc(LPVOID lpParam) {
 	Proxied* pThis = reinterpret_cast<Proxied*>(lpParam);
 	pThis->HandleRegistryChanges(pThis->hEvent_);
 	return 0;
-}
-
-std::wstring Proxied::EnsureProxyPrefix(const std::wstring& proxy) {
-	if (proxy.find(L"://") == std::wstring::npos) {
-		return L"http://" + proxy;
-	}
-	return proxy;
 }
 
 // 以隐藏方式运行命令，捕获 stdout/stderr 到 output，返回是否成功创建进程
@@ -905,12 +939,16 @@ void Proxied::ApplyChanges() {
     // 初始读取代理设置
     bool proxyEnabled = GetProxySettings();
     proxyEnabled_ = proxyEnabled;
-    UpdateSettingsDialogIcon();
+    // 设置窗口句柄只由 UI 线程访问，通过消息刷新图标。
+    PostMessage(hWnd_, WM_SETTINGS_PROXY_STATE, 0, 0);
 
     if (proxyEnabled) {
-        UpdateUserEnvironmentVariable(_T("http_proxy"), httpProxy_.empty() ? nullptr : &httpProxy_);
-        UpdateUserEnvironmentVariable(_T("https_proxy"), httpProxy_.empty() ? nullptr : &httpProxy_);
+        const std::wstring& envProxy = !httpProxy_.empty() ? httpProxy_ : socks5Proxy_;
+        std::wstring noProxy = BuildNoProxy(nonProxyHosts_);
+        UpdateUserEnvironmentVariable(_T("http_proxy"), envProxy.empty() ? nullptr : &envProxy);
+        UpdateUserEnvironmentVariable(_T("https_proxy"), envProxy.empty() ? nullptr : &envProxy);
         UpdateUserEnvironmentVariable(_T("all_proxy"), socks5Proxy_.empty() ? nullptr : &socks5Proxy_);
+        UpdateUserEnvironmentVariable(_T("no_proxy"), noProxy.empty() ? nullptr : &noProxy);
         if (gradleProxyEnabled_) {
             UpdateGradleConfig(true);
         }
@@ -924,6 +962,7 @@ void Proxied::ApplyChanges() {
         UpdateUserEnvironmentVariable(_T("http_proxy"), nullptr);
         UpdateUserEnvironmentVariable(_T("https_proxy"), nullptr);
         UpdateUserEnvironmentVariable(_T("all_proxy"), nullptr);
+        UpdateUserEnvironmentVariable(_T("no_proxy"), nullptr);
         if (gradleProxyEnabled_) {
             UpdateGradleConfig(false);
         }
@@ -1100,7 +1139,7 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 		case IDM_GIT_PROXY:
 		case IDM_GRADLE_PROXY:
 		case IDM_WSL_GIT_PROXY:
-		case IDM_SETTINGS:
+		case IDM_SETTINGS: {
 			// 设置窗口在 UI 线程显示，实际写注册表与同步仍在后台线程执行。
 			int operationId = LOWORD(wParam);
 			if (pThis->opBusy_) {
@@ -1134,8 +1173,12 @@ LRESULT CALLBACK Proxied::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 			}
 			break;
 		}
+		}
 		break;
 	}
+	case WM_SETTINGS_PROXY_STATE:
+		pThis->UpdateSettingsDialogIcon();
+		break;
 	case WM_PROXY_OP_DONE: {
 		int opId = static_cast<int>(wParam);
 		bool ok = (lParam != 0);
