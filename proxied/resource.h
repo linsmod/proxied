@@ -5,6 +5,7 @@
 #define IDR_MAINFRAME			128
 #define IDD_PROXIED_DIALOG	102
 #define IDD_ABOUTBOX			103
+#define IDD_PROXY_SETTINGS		106
 #define IDM_ABOUT				104
 #define IDM_EXIT				105
 #define IDI_PROXIED			107
@@ -22,6 +23,12 @@
 #define IDM_EXIT                105
 #define IDM_GIT_PROXY           110
 #define IDM_GRADLE_PROXY        111
+#define IDM_SETTINGS            114
+
+#define IDC_HTTP_PROXY_EDIT     1201
+#define IDC_SOCKS5_PROXY_EDIT   1202
+#define IDC_HTTP_PROXY_LABEL    1203
+#define IDC_SOCKS5_PROXY_LABEL  1204
 
 // 新对象的下一组默认值
 //

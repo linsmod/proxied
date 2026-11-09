@@ -9,14 +9,16 @@
 ## 功能
 
 - **系统级代理开关**：启用/禁用 Windows 系统代理，实时同步 Windows 设置页（通过监听注册表实现）
-- **代理分组**：内置多组代理配置，托盘菜单一键切换，不用每次去设置页改地址
+- **分别配置 HTTP 与 SOCKS5**：托盘菜单打开“代理设置”，例如 `http://192.168.0.4:8502` 和 `socks5://192.168.0.4:8501`，可只填写其中一个
 - **同步 Git 代理**：启用/禁用时同步写入 `git config --global http.proxy/https.proxy`
 - **同步 Gradle 代理**：启用/禁用时同步写入 `~/.gradle/gradle.properties`
 - **同步 WSL 内 Git 代理**：启用/禁用时通过 `wsl.exe` 同步写入 WSL 内的 git 全局代理配置
-- **同步 `http_proxy` 环境变量**：一并写入 `HKCU\Environment`，照顾那些读环境变量的程序
+- **同步代理环境变量**：一并写入 `HKCU\Environment` 的 `http_proxy`、`https_proxy`、`all_proxy`、`no_proxy`
 - **开机自启**：可选随 Windows 启动
 
-以上三项"同步 Git / Gradle / WSL Git"都是独立的开关（托盘菜单里勾选），默认全部开启，按需关掉某个就行。
+以上三项"同步 Git / Gradle / WSL Git"都是独立的开关（托盘菜单里勾选），Git 和 Gradle 默认开启，WSL Git 默认关闭，按需调整即可。
+
+为避免双重代理，同时配置两种代理时，Git 和 Gradle 都优先使用 HTTP；只配置 SOCKS5 时使用 SOCKS5。SOCKS5-only 模式下也会用 SOCKS5 地址回填 `http_proxy` / `https_proxy`，兼容不读取 `all_proxy` 的工具。Windows `ProxyOverride` 会同步为逗号分隔的 `no_proxy`。
 
 ## 原理
 
@@ -31,9 +33,9 @@ Windows 自家程序大多乖乖用系统级代理设置，但有些开发工具
 | --- | --- |
 | Windows 系统代理 | `HKCU\...\Internet Settings`（ProxyEnable / ProxyServer） |
 | Git（Windows） | `git config --global http.proxy / https.proxy` |
-| Gradle | `~/.gradle/gradle.properties`（systemProp.http.* / systemProp.https.*） |
+| Gradle | `~/.gradle/gradle.properties`（HTTP 优先，SOCKS5-only 时写入 systemProp.socksProxy*） |
 | WSL 内 Git | WSL 内 `git config --global http.proxy / https.proxy` |
-| 环境变量 | `HKCU\Environment` 的 `http_proxy` / `https_proxy` |
+| 环境变量 | `HKCU\Environment` 的 `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` |
 
 它同时也写入 `http_proxy` 环境变量——我开始以为 Gradle 会读取它，然而并没有。或许某个其他软件会使用这个变量，就像在 Ubuntu 上面一样？我不知道，但仍然保留了这部分代码和功能。
 
