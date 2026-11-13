@@ -10,7 +10,7 @@ BEGIN
     EDITTEXT        IDC_HTTP_PROXY_EDIT, 104, 10, 184, 14, ES_AUTOHSCROLL
     LTEXT           "SOCKS5 proxy:", IDC_SOCKS5_PROXY_LABEL, 12, 36, 90, 10
     EDITTEXT        IDC_SOCKS5_PROXY_EDIT, 104, 33, 184, 14, ES_AUTOHSCROLL
-    LTEXT           "Note: the Windows system proxy only supports SOCKS4 for the SOCKS entry\n(no SOCKS5, authentication or IPv6). A SOCKS5-only proxy works for\nGit, Gradle and environment variables, but not as the system proxy.", IDC_PROXY_HINT, 12, 54, 276, 34
+    LTEXT           "Note: SOCKS5 works with Git, Gradle, and environment variables. The Windows system proxy only supports SOCKS4 (no auth, no IPv6), so SOCKS5-only proxies cannot be used as the system proxy; use a proxy that supports both SOCKS4 and SOCKS5 instead.", IDC_PROXY_HINT, 12, 54, 276, 34
     DEFPUSHBUTTON   "Save", IDOK, 176, 92, 52, 16
     PUSHBUTTON      "Cancel", IDCANCEL, 236, 92, 52, 16
 END
