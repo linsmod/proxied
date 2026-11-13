@@ -1,17 +1,38 @@
 #include <windows.h>
 #include "StringResources.h"
 
-// 多语言字符串表主入口：三种语言版本同时编译进 exe，
-// LoadString 在运行时按系统 UI 语言自动选择最匹配的版本。
+// 中性语言（英文兜底）字符串表。
+// 语言资源直接参与编译，不要再通过 .rc include 拆分：
+// MSBuild 的 RC 任务不会把被 include 的 .rc 记为编译依赖，
+// 改了子文件却未触发重编译时会继续用旧字符串。
 
-// 中性语言（英文兜底）：保证非中文/英文系统也能加载到字符串
 LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
-#include "StringResources_en.rc"
 
-// 英文（美国）
-LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
-#include "StringResources_en.rc"
+STRINGTABLE
+BEGIN
+    IDS_ENABLE_PROXY          "Enable Proxy"
+    IDS_DISABLE_PROXY         "Disable Proxy"
+    IDS_AUTOSTART             "Start with Windows"
+    IDS_GIT_PROXY_SYNC        "Make Git follow proxy changes"
+    IDS_WSL_GIT_PROXY_SYNC    "Make Git (WSL) follow proxy changes"
+    IDS_GRADLE_PROXY_SYNC     "Make Gradle follow proxy changes"
+    IDS_ABOUT                 "About Proxied"
+    IDS_EXIT                  "Exit"
+    IDS_LOADING               "Proxied - Loading..."
+    IDS_PROCESSING            "Proxied - Processing..."
+    IDS_PROXY_ENABLED         "Proxied - Proxy Enabled"
+    IDS_PROXY_DISABLED        "Proxied - Proxy Disabled"
+    IDS_CANNOT_START_TASK     "Cannot start background task."
+    IDS_WSL_GIT_ERROR         "Cannot modify WSL Git proxy settings. Please check if WSL and Git are installed."
+    IDS_APP_TITLE             "Proxied"
+    IDS_PROXY_SETTINGS        "Proxy settings"
+    IDS_HTTP_PROXY            "HTTP proxy address:"
+    IDS_SOCKS5_PROXY          "SOCKS5 proxy:"
+    IDS_CURRENT_VERSION       "Current version: "
+    IDS_SAVE                  "Save"
+    IDS_CANCEL                "Cancel"
+    IDS_INVALID_PROXY         "Enter a valid proxy address with a host and port (1-65535), and configure at least one proxy."
+    IDS_PROXY_SAVE_ERROR      "Cannot save proxy settings to the Windows registry."
+    IDS_PROXY_HINT            "Note: the Windows system proxy only supports SOCKS4 for the SOCKS entry\n(no SOCKS5, authentication or IPv6). A SOCKS5-only proxy works for\nGit, Gradle and environment variables, but not as the system proxy."
 
-// 简体中文
-LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
-#include "StringResources_zh.rc"
+END

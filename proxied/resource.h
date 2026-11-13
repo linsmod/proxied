@@ -29,6 +29,7 @@
 #define IDC_SOCKS5_PROXY_EDIT   1202
 #define IDC_HTTP_PROXY_LABEL    1203
 #define IDC_SOCKS5_PROXY_LABEL  1204
+#define IDC_PROXY_HINT          1205
 
 // 新对象的下一组默认值
 //

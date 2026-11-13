@@ -43,6 +43,12 @@
     <ResourceCompile Include="proxied.rc">
       <Filter>资源文件</Filter>
     </ResourceCompile>
+    <ResourceCompile Include="StringResources.rc">
+      <Filter>资源文件</Filter>
+    </ResourceCompile>
+    <ResourceCompile Include="StringResources_zh.rc">
+      <Filter>资源文件</Filter>
+    </ResourceCompile>
     <ResourceCompile Include="ProxySettingsDialog.rc">
       <Filter>资源文件</Filter>
     </ResourceCompile>
