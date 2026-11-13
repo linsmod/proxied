@@ -43,13 +43,16 @@ Windows 自家程序大多乖乖用系统级代理设置，但有些开发工具
 
 ## 构建
 
-项目为 Visual Studio 工程（x64），编译命令：
+项目使用 CMake（Visual Studio 2022 生成器，x64）：
 
 ```powershell
-MSBuild proxied\proxied.vcxproj /p:Configuration=Release /p:Platform=x64
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
 ```
 
-产物在 `proxied\x64\Release\proxied.exe`。
+产物在 `build\Release\proxied.exe`。托盘程序的“开机自启”项也指向这一路径，因此重新编译后重启程序即可用上新版本。
+
+> 程序是单实例的：托盘里已有实例在运行时，直接双击新编译的 exe 会立即退出，实际生效的仍是旧实例。请先从托盘退出旧实例，再启动新版本（或重新登录）。
 
 ## 依赖
 
